@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "Comfy.FlowWrangler";
-const EXTENSION_VERSION = "0.2.1";
+const EXTENSION_VERSION = "0.2.2";
 const SETTING_GESTURE = `${EXTENSION_NAME}.LazyConnectGesture`;
 const SETTING_REPLACE = `${EXTENSION_NAME}.ReplaceConnectedInputs`;
 const BYPASS_MODE = 4;
@@ -11,6 +11,7 @@ let gestureEnabled = true;
 let replaceConnectedInputs = false;
 let lastPointer = { clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 };
 let lazyGesture = null;
+let pendingClickSource = null;
 let suppressContextMenuUntil = 0;
 let gestureOverlay = null;
 
@@ -532,21 +533,45 @@ function installLazyConnectGesture() {
     }, true);
 
     canvasElement.addEventListener("pointerdown", (event) => {
-        if (!gestureEnabled || event.button !== 2 || !event.altKey) return;
+        if (!gestureEnabled || event.button !== 2 || !event.altKey) {
+            if (pendingClickSource) {
+                pendingClickSource = null;
+                overlay.svg.style.display = "none";
+            }
+            return;
+        }
         const source = nodeAtEvent(event);
-        if (!source) return;
         event.preventDefault();
         event.stopImmediatePropagation();
+        if (!source) {
+            pendingClickSource = null;
+            overlay.svg.style.display = "none";
+            suppressContextMenuUntil = performance.now() + 350;
+            notify("已取消 Alt + 右键连接", "info");
+            return;
+        }
         lazyGesture = { source, startX: event.clientX, startY: event.clientY, moved: false };
         overlay.svg.style.display = "block";
-        for (const attribute of ["x1", "x2"]) overlay.line.setAttribute(attribute, String(event.clientX));
-        for (const attribute of ["y1", "y2"]) overlay.line.setAttribute(attribute, String(event.clientY));
+        if (!pendingClickSource) {
+            overlay.line.setAttribute("x1", String(event.clientX));
+            overlay.line.setAttribute("y1", String(event.clientY));
+        }
+        overlay.line.setAttribute("x2", String(event.clientX));
+        overlay.line.setAttribute("y2", String(event.clientY));
     }, true);
 
     window.addEventListener("pointermove", (event) => {
-        if (!lazyGesture) return;
-        const distance = Math.hypot(event.clientX - lazyGesture.startX, event.clientY - lazyGesture.startY);
-        lazyGesture.moved ||= distance > 6;
+        if (lazyGesture) {
+            const distance = Math.hypot(event.clientX - lazyGesture.startX, event.clientY - lazyGesture.startY);
+            if (!lazyGesture.moved && distance > 6) {
+                lazyGesture.moved = true;
+                pendingClickSource = null;
+                overlay.line.setAttribute("x1", String(lazyGesture.startX));
+                overlay.line.setAttribute("y1", String(lazyGesture.startY));
+            }
+        } else if (!pendingClickSource) {
+            return;
+        }
         overlay.line.setAttribute("x2", String(event.clientX));
         overlay.line.setAttribute("y2", String(event.clientY));
     }, true);
@@ -557,19 +582,53 @@ function installLazyConnectGesture() {
         event.stopImmediatePropagation();
         const gesture = lazyGesture;
         lazyGesture = null;
-        overlay.svg.style.display = "none";
         suppressContextMenuUntil = performance.now() + 350;
         const target = nodeAtEvent(event);
-        if (!gesture.moved || !target || target === gesture.source) return;
+
+        if (!gesture.moved) {
+            const clickedNode = target ?? gesture.source;
+            if (!pendingClickSource) {
+                pendingClickSource = {
+                    node: clickedNode,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                };
+                overlay.svg.style.display = "block";
+                overlay.line.setAttribute("x1", String(event.clientX));
+                overlay.line.setAttribute("y1", String(event.clientY));
+                overlay.line.setAttribute("x2", String(event.clientX));
+                overlay.line.setAttribute("y2", String(event.clientY));
+                notify(`已选择源节点：${clickedNode.title ?? clickedNode.type}；再 Alt + 右键目标节点`, "info");
+                return;
+            }
+
+            const source = pendingClickSource.node;
+            pendingClickSource = null;
+            overlay.svg.style.display = "none";
+            if (!clickedNode || clickedNode === source) {
+                notify("已取消 Alt + 右键连接", "info");
+                return;
+            }
+            let connected = false;
+            graphChanged(() => {
+                connected = smartConnectBetween(source, clickedNode, true);
+            });
+            notify(connected ? "Alt + 右键连接完成" : "两个节点之间没有兼容插槽", connected ? "success" : "warn");
+            return;
+        }
+
+        pendingClickSource = null;
+        overlay.svg.style.display = "none";
+        if (!target || target === gesture.source) return;
         let connected = false;
         graphChanged(() => {
             connected = smartConnectBetween(gesture.source, target, true);
         });
-        notify(connected ? "懒连接完成" : "两个节点之间没有兼容插槽", connected ? "success" : "warn");
+        notify(connected ? "Alt + 右键拖动连接完成" : "两个节点之间没有兼容插槽", connected ? "success" : "warn");
     }, true);
 
     canvasElement.addEventListener("contextmenu", (event) => {
-        if (lazyGesture || performance.now() < suppressContextMenuUntil) {
+        if (lazyGesture || performance.now() < suppressContextMenuUntil || (pendingClickSource && event.altKey)) {
             event.preventDefault();
             event.stopImmediatePropagation();
         }
@@ -599,17 +658,12 @@ app.registerExtension({
             commandId: "flow-wrangler.swap-inputs",
             targetElementId: "graph-canvas-container",
         },
-        {
-            combo: { ctrl: true, shift: true, key: "w" },
-            commandId: "flow-wrangler.show-menu",
-            targetElementId: "graph-canvas-container",
-        },
     ],
 
     settings: [
         {
             id: SETTING_GESTURE,
-            name: "Flow Wrangler：启用 Alt + 右键拖动智能连接",
+            name: "Flow Wrangler：启用 Alt + 右键点选 / 拖动智能连接",
             type: "boolean",
             defaultValue: true,
             onChange(value) { gestureEnabled = value !== false; },
