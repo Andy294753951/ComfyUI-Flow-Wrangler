@@ -2,6 +2,8 @@
 
 一个针对 ComfyUI 数据流重新设计的节点效率扩展。它借鉴的是“减少精确点选和重复操作”的交互目标，不复制 Blender Node Wrangler 的代码或节点规则。
 
+当前正式版本：`v0.2.1`
+
 ## 当前功能
 
 - **懒连接**：按住 `Alt`，从源节点向目标节点右键拖动；根据类型、插槽名称和占用状态选择连接。
@@ -49,3 +51,7 @@ ComfyUI/custom_nodes/ComfyUI-Flow-Wrangler
 `examples/` 中包含 4 套完全未接线的压力测试工作流，覆盖 Comfy Core、IPAdapter Plus、ControlNet Aux、UltimateSDUpscale 和 WanVideoWrapper 等节点类型。
 
 导入后可按 `Ctrl+A` 全选，再按 `Shift+W` 测试全局智能连接。WanVideoWrapper 未加载时，第 03、04 套可能显示缺失节点，可用于测试异构节点包和缺失节点容错。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。

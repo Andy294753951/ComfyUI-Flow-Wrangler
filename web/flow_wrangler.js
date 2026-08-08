@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "Comfy.FlowWrangler";
+const EXTENSION_VERSION = "0.2.1";
 const SETTING_GESTURE = `${EXTENSION_NAME}.LazyConnectGesture`;
 const SETTING_REPLACE = `${EXTENSION_NAME}.ReplaceConnectedInputs`;
 const BYPASS_MODE = 4;
@@ -644,6 +645,6 @@ app.registerExtension({
         replaceConnectedInputs = app.ui.settings.getSettingValue(SETTING_REPLACE) === true;
         patchCanvasMenu();
         installLazyConnectGesture();
-        console.info("[Flow Wrangler] Loaded (modern frontend keybindings enabled)");
+        console.info(`[Flow Wrangler] v${EXTENSION_VERSION} loaded (modern frontend keybindings enabled)`);
     },
 });
