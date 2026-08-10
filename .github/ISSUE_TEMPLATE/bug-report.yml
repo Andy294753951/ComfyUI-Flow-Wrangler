@@ -1,0 +1,104 @@
+name: General bug report
+description: Report a shortcut, UI, layout, reroute, bypass, localization, or compatibility problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. For wrong or missing Smart Connect edges, please use the dedicated **Smart Connect workflow report** template instead.
+
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Affected feature
+      options:
+        - Alt + Right Click Smart Connect
+        - Shift+W Smart Connect
+        - Shift+S Swap Inputs
+        - Output Reroute
+        - Data Flow Layout
+        - Batch Bypass
+        - Keybindings integration
+        - Localization or UI
+        - Installation or loading
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: comfyui_version
+    attributes:
+      label: ComfyUI version
+      placeholder: e.g. v0.3.45 or commit abc1234
+    validations:
+      required: true
+
+  - type: input
+    id: frontend_version
+    attributes:
+      label: ComfyUI frontend version
+      placeholder: e.g. 1.48.7
+
+  - type: input
+    id: flow_wrangler_version
+    attributes:
+      label: Flow Wrangler version
+      placeholder: e.g. v0.3.0
+    validations:
+      required: true
+
+  - type: input
+    id: browser_os
+    attributes:
+      label: Browser and operating system
+      placeholder: e.g. Chrome 140 on Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Run ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console output
+      description: Paste only relevant errors. Remove tokens, local paths, prompts, and other sensitive information.
+      render: shell
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow or screenshots
+      description: Attach a minimal workflow and screenshots when they help reproduce the problem.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I restarted ComfyUI and force-refreshed the browser before reproducing this issue.
+          required: true
+        - label: I removed secrets and other sensitive information from everything attached above.
+          required: true

@@ -1,0 +1,111 @@
+name: Smart Connect workflow report
+description: Report a wrong, missing, or ambiguous Smart Connect result with a reproducible workflow.
+title: "[Smart Connect]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Flow Wrangler. Real, reproducible workflows are the most useful test cases.
+
+        Please remove API keys, private paths, prompts, metadata, and other sensitive information before attaching files.
+
+  - type: dropdown
+    id: result_type
+    attributes:
+      label: What happened?
+      options:
+        - A connection was incorrect
+        - An expected connection was left unresolved
+        - The result changed between runs
+        - A third-party node was not recognized correctly
+        - Another Smart Connect problem
+    validations:
+      required: true
+
+  - type: input
+    id: comfyui_version
+    attributes:
+      label: ComfyUI version
+      description: Include the ComfyUI commit or release number when possible.
+      placeholder: e.g. v0.3.45 or commit abc1234
+    validations:
+      required: true
+
+  - type: input
+    id: frontend_version
+    attributes:
+      label: ComfyUI frontend version
+      placeholder: e.g. 1.48.7
+
+  - type: input
+    id: flow_wrangler_version
+    attributes:
+      label: Flow Wrangler version
+      placeholder: e.g. v0.3.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: custom_nodes
+    attributes:
+      label: Relevant custom node packs
+      description: List the repositories or Manager package names used by the affected nodes.
+      placeholder: One package per line
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Explain which nodes you selected and how you triggered Smart Connect.
+      placeholder: |
+        1. Load the attached disconnected workflow.
+        2. Select ...
+        3. Press Shift+W (or use Alt + Right Click).
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected connections
+      description: Describe the important edges that should be created or intentionally left unresolved.
+      placeholder: Source node.output → Target node.input
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Describe the wrong edge, missing edge, or other observed behavior.
+      placeholder: What did Flow Wrangler connect or leave unresolved?
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow_files
+    attributes:
+      label: Reproducible workflow files
+      description: Drag in the disconnected workflow JSON and, if possible, the Smart Connect result JSON. A minimal workflow is welcome, but a real complex workflow is even more useful.
+      placeholder: Drag workflow JSON files here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Add screenshots, recordings, node titles, group names, or anything else that explains the intended branch structure.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I removed API keys, private paths, private prompts, and other sensitive data from the attached files.
+          required: true
+        - label: I restarted ComfyUI and force-refreshed the browser before reproducing this result.
+          required: true
+
