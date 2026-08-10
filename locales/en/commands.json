@@ -1,0 +1,20 @@
+{
+  "flow-wrangler_smart-connect": {
+    "label": "Flow Wrangler: Smart-connect selected nodes"
+  },
+  "flow-wrangler_swap-inputs": {
+    "label": "Flow Wrangler: Swap inputs"
+  },
+  "flow-wrangler_add-reroutes": {
+    "label": "Flow Wrangler: Insert output reroute points"
+  },
+  "flow-wrangler_arrange": {
+    "label": "Flow Wrangler: Arrange selected nodes"
+  },
+  "flow-wrangler_toggle-bypass": {
+    "label": "Flow Wrangler: Bypass / restore nodes"
+  },
+  "flow-wrangler_show-menu": {
+    "label": "Flow Wrangler: Open quick menu"
+  }
+}

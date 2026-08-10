@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "Comfy.FlowWrangler";
-const EXTENSION_VERSION = "0.2.2";
+const EXTENSION_VERSION = "0.2.4";
 const SETTING_GESTURE = `${EXTENSION_NAME}.LazyConnectGesture`;
 const SETTING_REPLACE = `${EXTENSION_NAME}.ReplaceConnectedInputs`;
 const BYPASS_MODE = 4;
@@ -236,7 +236,7 @@ function bestGlobalCandidate(nodes, target, inputIndex, usedByTarget) {
 function smartConnectSelection() {
     const nodes = selectedNodes().sort((a, b) => a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
     if (nodes.length < 2) {
-        notify("请至少选择两个节点", "warn");
+        notify("Select at least two nodes", "warn");
         return false;
     }
     let connected = 0;
@@ -262,10 +262,12 @@ function smartConnectSelection() {
         }
     });
     if (connected) {
-        const suffix = unresolved ? `；${unresolved} 个输入在所选节点中没有兼容来源` : "";
-        notify(`已智能连接 ${connected} 条连线${suffix}`, unresolved ? "info" : "success");
+        const suffix = unresolved
+            ? `; ${unresolved} input${unresolved === 1 ? "" : "s"} had no compatible source in the selection`
+            : "";
+        notify(`Smart-connected ${connected} link${connected === 1 ? "" : "s"}${suffix}`, unresolved ? "info" : "success");
     }
-    else notify("未找到可兼容的空闲插槽", "warn");
+    else notify("No compatible free slots were found", "warn");
     return connected > 0;
 }
 
@@ -281,7 +283,7 @@ function linkedInputSnapshot(node, inputIndex) {
 function swapLinkedInputs() {
     const node = focusedNodes(1)[0];
     if (!node) {
-        notify("请选择一个节点", "warn");
+        notify("Select a node", "warn");
         return false;
     }
     const linked = (node.inputs ?? [])
@@ -301,7 +303,7 @@ function swapLinkedInputs() {
         }
     }
     if (!pair) {
-        notify("没有可安全交换的两个已连接输入", "warn");
+        notify("No connected input pair can be swapped safely", "warn");
         return false;
     }
 
@@ -311,28 +313,28 @@ function swapLinkedInputs() {
         pair[0].snapshot.origin.connect(pair[0].snapshot.originSlot, node, pair[1].index);
         pair[1].snapshot.origin.connect(pair[1].snapshot.originSlot, node, pair[0].index);
     });
-    notify(`已交换 ${pair[0].input.name} / ${pair[1].input.name}`, "success");
+    notify(`Swapped ${pair[0].input.name} / ${pair[1].input.name}`, "success");
     return true;
 }
 
 function toggleBypass() {
     const nodes = focusedNodes(1);
     if (!nodes.length) {
-        notify("请选择节点", "warn");
+        notify("Select one or more nodes", "warn");
         return false;
     }
     const restore = nodes.every((node) => node.mode === BYPASS_MODE);
     graphChanged(() => {
         for (const node of nodes) node.mode = restore ? ALWAYS_MODE : BYPASS_MODE;
     });
-    notify(restore ? "已恢复所选节点" : "已旁路所选节点", "success");
+    notify(restore ? "Restored selected nodes" : "Bypassed selected nodes", "success");
     return true;
 }
 
 function arrangeSelection() {
     const nodes = selectedNodes();
     if (nodes.length < 2) {
-        notify("请至少选择两个节点", "warn");
+        notify("Select at least two nodes", "warn");
         return false;
     }
 
@@ -403,7 +405,7 @@ function arrangeSelection() {
             node.pos[1] = pos[1] + oldCenter[1] - newCenter[1];
         }
     });
-    notify(`已按数据流整理 ${nodes.length} 个节点`, "success");
+    notify(`Arranged ${nodes.length} node${nodes.length === 1 ? "" : "s"} by data flow`, "success");
     return true;
 }
 
@@ -411,7 +413,7 @@ function addReroutesAfterSelection() {
     const nodes = focusedNodes(1);
     const rerouteType = LiteGraph.registered_node_types?.Reroute ? "Reroute" : null;
     if (!nodes.length || !rerouteType) {
-        notify(rerouteType ? "请选择节点" : "当前前端没有可用的 Reroute 节点", "warn");
+        notify(rerouteType ? "Select one or more nodes" : "No Reroute node type is available in this frontend", "warn");
         return false;
     }
     let created = 0;
@@ -439,18 +441,23 @@ function addReroutesAfterSelection() {
             }
         }
     });
-    notify(created ? `已插入 ${created} 个扇出中继点` : "所选节点没有输出连线", created ? "success" : "warn");
+    notify(
+        created
+            ? `Inserted ${created} fan-out reroute point${created === 1 ? "" : "s"}`
+            : "The selected nodes have no output links",
+        created ? "success" : "warn",
+    );
     return created > 0;
 }
 
 function commandOptions() {
     return [
-        { content: "全局匹配并连接所选节点", callback: smartConnectSelection },
-        { content: "交换当前节点的两个输入", callback: swapLinkedInputs },
-        { content: "插入输出中继点", callback: addReroutesAfterSelection },
-        { content: "按数据流整理所选节点", callback: arrangeSelection },
+        { content: "Smart-connect selected nodes", callback: smartConnectSelection },
+        { content: "Swap two inputs on the current node", callback: swapLinkedInputs },
+        { content: "Insert output reroute points", callback: addReroutesAfterSelection },
+        { content: "Arrange selected nodes by data flow", callback: arrangeSelection },
         null,
-        { content: "旁路 / 恢复所选节点", callback: toggleBypass },
+        { content: "Bypass / restore selected nodes", callback: toggleBypass },
     ];
 }
 
@@ -547,7 +554,7 @@ function installLazyConnectGesture() {
             pendingClickSource = null;
             overlay.svg.style.display = "none";
             suppressContextMenuUntil = performance.now() + 350;
-            notify("已取消 Alt + 右键连接", "info");
+            notify("Alt + right-click connection cancelled", "info");
             return;
         }
         lazyGesture = { source, startX: event.clientX, startY: event.clientY, moved: false };
@@ -598,7 +605,7 @@ function installLazyConnectGesture() {
                 overlay.line.setAttribute("y1", String(event.clientY));
                 overlay.line.setAttribute("x2", String(event.clientX));
                 overlay.line.setAttribute("y2", String(event.clientY));
-                notify(`已选择源节点：${clickedNode.title ?? clickedNode.type}；再 Alt + 右键目标节点`, "info");
+                notify(`Source selected: ${clickedNode.title ?? clickedNode.type}. Alt + right-click a target node`, "info");
                 return;
             }
 
@@ -606,14 +613,14 @@ function installLazyConnectGesture() {
             pendingClickSource = null;
             overlay.svg.style.display = "none";
             if (!clickedNode || clickedNode === source) {
-                notify("已取消 Alt + 右键连接", "info");
+                notify("Alt + right-click connection cancelled", "info");
                 return;
             }
             let connected = false;
             graphChanged(() => {
                 connected = smartConnectBetween(source, clickedNode, true);
             });
-            notify(connected ? "Alt + 右键连接完成" : "两个节点之间没有兼容插槽", connected ? "success" : "warn");
+            notify(connected ? "Alt + right-click connection completed" : "The two nodes have no compatible slots", connected ? "success" : "warn");
             return;
         }
 
@@ -624,7 +631,7 @@ function installLazyConnectGesture() {
         graphChanged(() => {
             connected = smartConnectBetween(gesture.source, target, true);
         });
-        notify(connected ? "Alt + 右键拖动连接完成" : "两个节点之间没有兼容插槽", connected ? "success" : "warn");
+        notify(connected ? "Alt + right-drag connection completed" : "The two nodes have no compatible slots", connected ? "success" : "warn");
     }, true);
 
     canvasElement.addEventListener("contextmenu", (event) => {
@@ -639,12 +646,12 @@ app.registerExtension({
     name: EXTENSION_NAME,
 
     commands: [
-        { id: "flow-wrangler.smart-connect", label: "Flow Wrangler: 全局匹配并连接所选节点", function: smartConnectSelection },
-        { id: "flow-wrangler.swap-inputs", label: "Flow Wrangler: 交换输入", function: swapLinkedInputs },
-        { id: "flow-wrangler.add-reroutes", label: "Flow Wrangler: 插入输出中继点", function: addReroutesAfterSelection },
-        { id: "flow-wrangler.arrange", label: "Flow Wrangler: 整理所选节点", function: arrangeSelection },
-        { id: "flow-wrangler.toggle-bypass", label: "Flow Wrangler: 旁路 / 恢复节点", function: toggleBypass },
-        { id: "flow-wrangler.show-menu", label: "Flow Wrangler: 打开快捷菜单", function: showCommandMenu },
+        { id: "flow-wrangler.smart-connect", label: "Flow Wrangler: Smart-connect selected nodes", function: smartConnectSelection },
+        { id: "flow-wrangler.swap-inputs", label: "Flow Wrangler: Swap inputs", function: swapLinkedInputs },
+        { id: "flow-wrangler.add-reroutes", label: "Flow Wrangler: Insert output reroute points", function: addReroutesAfterSelection },
+        { id: "flow-wrangler.arrange", label: "Flow Wrangler: Arrange selected nodes", function: arrangeSelection },
+        { id: "flow-wrangler.toggle-bypass", label: "Flow Wrangler: Bypass / restore nodes", function: toggleBypass },
+        { id: "flow-wrangler.show-menu", label: "Flow Wrangler: Open quick menu", function: showCommandMenu },
     ],
 
     keybindings: [
@@ -663,14 +670,14 @@ app.registerExtension({
     settings: [
         {
             id: SETTING_GESTURE,
-            name: "Flow Wrangler：启用 Alt + 右键点选 / 拖动智能连接",
+            name: "Flow Wrangler: Enable Alt + right-click / right-drag smart connection",
             type: "boolean",
             defaultValue: true,
             onChange(value) { gestureEnabled = value !== false; },
         },
         {
             id: SETTING_REPLACE,
-            name: "Flow Wrangler：智能连接可替换已有输入",
+            name: "Flow Wrangler: Allow smart connection to replace existing inputs",
             type: "boolean",
             defaultValue: false,
             onChange(value) { replaceConnectedInputs = value === true; },

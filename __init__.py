@@ -1,6 +1,6 @@
 """Frontend-only workflow wrangling tools for ComfyUI."""
 
-__version__ = "0.2.2"
+__version__ = "0.2.4"
 
 WEB_DIRECTORY = "./web"
 

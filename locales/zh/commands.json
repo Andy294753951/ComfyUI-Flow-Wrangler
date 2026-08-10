@@ -1,0 +1,20 @@
+{
+  "flow-wrangler_smart-connect": {
+    "label": "Flow Wrangler：全局匹配并连接所选节点"
+  },
+  "flow-wrangler_swap-inputs": {
+    "label": "Flow Wrangler：交换输入"
+  },
+  "flow-wrangler_add-reroutes": {
+    "label": "Flow Wrangler：插入输出中继点"
+  },
+  "flow-wrangler_arrange": {
+    "label": "Flow Wrangler：整理所选节点"
+  },
+  "flow-wrangler_toggle-bypass": {
+    "label": "Flow Wrangler：旁路 / 恢复节点"
+  },
+  "flow-wrangler_show-menu": {
+    "label": "Flow Wrangler：打开快捷菜单"
+  }
+}

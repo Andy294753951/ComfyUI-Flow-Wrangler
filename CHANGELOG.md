@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.4 - 2026-08-10
+
+- 按 ComfyUI Manager 审核要求，将 Toast、右键菜单、命令面板和设置面板的默认 UI 字符串统一为英文。
+- 通过 ComfyUI 官方 locale 机制为命令和设置保留简体中文翻译。
+- 增加 UI 字符串与 locale 文件的静态回归检查。
+
 ## v0.2.2 - 2026-08-08
 
 - 移除会触发 Chrome/Edge“关闭窗口”的 Ctrl+Shift+W 默认绑定；命令仍可在设置 → 快捷键中自行绑定。

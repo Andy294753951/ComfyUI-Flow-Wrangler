@@ -1,0 +1,8 @@
+{
+  "Comfy_FlowWrangler_LazyConnectGesture": {
+    "name": "Flow Wrangler: Enable Alt + right-click / right-drag smart connection"
+  },
+  "Comfy_FlowWrangler_ReplaceConnectedInputs": {
+    "name": "Flow Wrangler: Allow smart connection to replace existing inputs"
+  }
+}

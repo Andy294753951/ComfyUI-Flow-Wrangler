@@ -1,0 +1,8 @@
+{
+  "Comfy_FlowWrangler_LazyConnectGesture": {
+    "name": "Flow Wrangler：启用 Alt + 右键点选 / 拖动智能连接"
+  },
+  "Comfy_FlowWrangler_ReplaceConnectedInputs": {
+    "name": "Flow Wrangler：智能连接可替换已有输入"
+  }
+}
