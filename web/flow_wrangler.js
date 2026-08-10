@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "Comfy.FlowWrangler";
-const EXTENSION_VERSION = "0.2.4";
+const EXTENSION_VERSION = "0.2.5";
 const SETTING_GESTURE = `${EXTENSION_NAME}.LazyConnectGesture`;
 const SETTING_REPLACE = `${EXTENSION_NAME}.ReplaceConnectedInputs`;
 const BYPASS_MODE = 4;
@@ -45,6 +45,75 @@ function normalizeName(value) {
     return String(value ?? "")
         .toLowerCase()
         .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function polarityFromText(value) {
+    const text = String(value ?? "").toLowerCase();
+    if (!text) return "neutral";
+
+    // Keep this deliberately conservative: generic words such as "prompt" are
+    // not positive signals because both prompt encoders often keep the same
+    // default title.
+    if (/(^|[^a-z])(negative|neg|uncond|unconditional|uc)([^a-z]|$)/.test(text)
+        || /(\u8d1f\u5411|\u8d1f\u9762|\u8d1f\u63d0\u793a|\u53cd\u5411\u63d0\u793a|\u53cd\u5411\u8bcd|\u660e\u786e\u6392\u9664|\u6392\u9664\u9879)/.test(text)) {
+        return "negative";
+    }
+    if (/(^|[^a-z])(positive|pos)([^a-z]|$)/.test(text)
+        || /(\u6b63\u5411|\u6b63\u9762|\u6b63\u63d0\u793a|\u4e3b\u63d0\u793a)/.test(text)) {
+        return "positive";
+    }
+    return "neutral";
+}
+
+function sourcePolarity(node, outputIndex) {
+    const output = node?.outputs?.[outputIndex];
+    const parts = [
+        node?.title,
+        node?.type,
+        node?.constructor?.title,
+        node?.properties?.["Node name for S&R"],
+        output?.name,
+        output?.label,
+    ];
+    for (const part of parts) {
+        const polarity = polarityFromText(part);
+        if (polarity !== "neutral") return polarity;
+    }
+    return "neutral";
+}
+
+function inputPolarity(target, inputIndex) {
+    const input = target?.inputs?.[inputIndex];
+    // Socket names are the strongest signal: KSampler exposes explicit
+    // positive/negative CONDITIONING inputs. Fall back to the target title for
+    // custom nodes whose socket names are generic.
+    for (const part of [input?.name, input?.label]) {
+        const polarity = polarityFromText(part);
+        if (polarity !== "neutral") return polarity;
+    }
+    for (const part of [target?.title, target?.type]) {
+        const polarity = polarityFromText(part);
+        if (polarity !== "neutral") return polarity;
+    }
+    return "neutral";
+}
+
+function conditioningPolarityScore(source, outputIndex, target, inputIndex) {
+    const output = source?.outputs?.[outputIndex];
+    const input = target?.inputs?.[inputIndex];
+    if (!output || !input) return 0;
+
+    const outputType = normalizeType(output.type);
+    const inputType = normalizeType(input.type);
+    if (!outputType.includes("CONDITIONING") || !inputType.includes("CONDITIONING")) return 0;
+
+    const wanted = inputPolarity(target, inputIndex);
+    if (wanted === "neutral") return 0;
+    const offered = sourcePolarity(source, outputIndex);
+
+    if (offered === wanted) return wanted === "negative" ? 1800 : 1400;
+    if (offered !== "neutral") return -2200;
+    return 0;
 }
 
 function typesCompatible(outputType, inputType) {
@@ -208,12 +277,13 @@ function globalCandidateScore(source, outputIndex, target, inputIndex, reusedFor
         if (outputName === inputName) score += 360;
         else if (outputName.includes(inputName) || inputName.includes(outputName)) score += 150;
     }
+    score += conditioningPolarityScore(source, outputIndex, target, inputIndex);
     if (reusedForTarget) score -= 520;
     return score;
 }
 
 function bestGlobalCandidate(nodes, target, inputIndex, usedByTarget) {
-    let best = null;
+    const candidates = [];
     for (const source of nodes) {
         if (source === target) continue;
         for (let outputIndex = 0; outputIndex < (source.outputs?.length ?? 0); outputIndex++) {
@@ -225,12 +295,44 @@ function bestGlobalCandidate(nodes, target, inputIndex, usedByTarget) {
                 inputIndex,
                 usedByTarget.has(key),
             );
-            if (!best || score > best.score) {
-                best = { source, target, outputIndex, inputIndex, score, key };
+            if (score > -Infinity) {
+                candidates.push({
+                    source, target, outputIndex, inputIndex, score, key,
+                    sourcePolarity: sourcePolarity(source, outputIndex),
+                    outputY: slotPosition(source, false, outputIndex)[1],
+                });
             }
         }
     }
-    return best?.score > -Infinity ? best : null;
+    if (!candidates.length) return null;
+
+    // Prefer distinct compatible sources for same-type target inputs. Reuse is
+    // still allowed when only one compatible source exists.
+    const unused = candidates.filter((candidate) => !usedByTarget.has(candidate.key));
+    const pool = unused.length ? unused : candidates;
+
+    // When no source has an explicit semantic label, keep vertical placement as
+    // a weak fallback only. Explicit positive/negative labels remain stronger.
+    const wanted = inputPolarity(target, inputIndex);
+    if (wanted !== "neutral") {
+        const conditioning = pool.filter((candidate) =>
+            normalizeType(candidate.source.outputs?.[candidate.outputIndex]?.type).includes("CONDITIONING")
+        );
+        const hasExplicitMatch = conditioning.some((candidate) => candidate.sourcePolarity === wanted);
+        if (!hasExplicitMatch && conditioning.length > 1) {
+            const ys = conditioning.map((candidate) => candidate.outputY);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+            const span = Math.max(1, maxY - minY);
+            for (const candidate of conditioning) {
+                if (candidate.sourcePolarity !== "neutral") continue;
+                const rank = (candidate.outputY - minY) / span;
+                candidate.score += wanted === "positive" ? (1 - rank) * 220 : rank * 220;
+            }
+        }
+    }
+
+    return pool.reduce((best, candidate) => !best || candidate.score > best.score ? candidate : best, null);
 }
 
 function smartConnectSelection() {

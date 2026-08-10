@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 COMMAND_IDS = {
     "flow-wrangler.smart-connect",
     "flow-wrangler.swap-inputs",
@@ -39,6 +39,17 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_default_javascript_ui_contains_no_cjk_strings(self):
         javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"[\u3400-\u9fff]", javascript))
+
+    def test_v023_smart_connect_features_are_present(self):
+        javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")
+        for symbol in (
+            "polarityFromText",
+            "sourcePolarity",
+            "inputPolarity",
+            "conditioningPolarityScore",
+            "const unused = candidates.filter",
+        ):
+            self.assertIn(symbol, javascript)
 
     def test_locale_files_cover_all_commands_and_settings(self):
         expected_commands = {command_id.replace(".", "_") for command_id in COMMAND_IDS}
