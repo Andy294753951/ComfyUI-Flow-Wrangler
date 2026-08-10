@@ -1,0 +1,35 @@
+ComfyUI Flow Wrangler v0.3.0 release validation
+================================================
+Date: 2026-08-10
+
+Release checks
+--------------
+PASS node --check web/flow_wrangler.js
+PASS node tests/test_smart_connect.cjs
+PASS node tests/test_smart_connect_roles.cjs
+PASS node tests/test_example_workflows.cjs
+PASS node tests/test_sink_image_contracts.cjs
+PASS node tests/test_solver_v3_safety.cjs
+PASS node tests/test_solver_v3_workflows.cjs
+PASS python tests/test_release.py
+
+Validated regression coverage inherited from v0.3.0-rc1
+--------------------------------------------------------
+PASS Ground Truth Suite: 16/16 exact, average F1 100.00%
+PASS Boss Fight Suite: 5/5 exact, average F1 100.00%
+PASS 414-node Omniverse: 458/458 exact
+PASS Krea2 -> Pose/Depth -> Anima real workflow: 32/32 exact
+PASS 7 generated Krea2/Anima solver workflows: all exact
+PASS Geometry fuzz: 120/120 exact
+
+Release metadata
+----------------
+PASS __init__.py version = 0.3.0
+PASS web/flow_wrangler.js EXTENSION_VERSION = 0.3.0
+PASS README marks v0.3.0 as current stable version
+PASS test_release.py version synchronized
+PASS default JavaScript UI contains no CJK UI strings
+PASS en/zh locale coverage for commands/settings
+PASS no requirements.txt
+PASS no install.py
+PASS frontend-only NODE_CLASS_MAPPINGS remains empty

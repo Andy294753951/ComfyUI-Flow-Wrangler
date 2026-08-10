@@ -4,6 +4,147 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Frontend%20Extension-black)
 
+[English](#english) · [中文](#中文文档)
+
+<a id="english"></a>
+
+## Stop manually wiring large ComfyUI workflows
+
+**ComfyUI Flow Wrangler** is an open-source frontend productivity extension for ComfyUI.
+
+Select a group of disconnected nodes, press **`Shift+W`**, and Smart Connect tries to reconstruct the most plausible data flow from the graph context.
+
+![Flow Wrangler Smart Connect demo](assets/flow-wrangler-smart-connect-demo.gif)
+
+> A disconnected multi-branch workflow is selected and reconnected with `Shift+W`.
+>
+> [View the lightweight MP4 version](assets/flow-wrangler-smart-connect-demo.mp4).
+
+The goal is not to fill every compatible socket. Flow Wrangler prioritizes connection quality and can leave an input unresolved when the available evidence is too ambiguous.
+
+**Current release: `v0.3.0`**
+
+---
+
+## Why Flow Wrangler?
+
+Large ComfyUI graphs often contain many sockets with the same base type but very different roles.
+
+For example, all of these may be represented as `IMAGE`:
+
+- a source image
+- a generated or decoded image
+- a Pose, Depth or Canny control image
+- an IPAdapter reference image
+- a final image intended for `SaveImage`
+
+Likewise, a base model and every intermediate result in a LoRA, ControlNet, LLLite or IPAdapter transform chain may all be represented as `MODEL`.
+
+A nearest-compatible-socket strategy can therefore create edges that are type-valid but semantically wrong. Flow Wrangler uses graph structure, node semantics, data roles and workflow context to choose better candidates.
+
+---
+
+## Quick start
+
+### Install
+
+Clone the repository into `ComfyUI/custom_nodes/`:
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/Andy294753951/ComfyUI-Flow-Wrangler.git
+```
+
+Then:
+
+1. Restart ComfyUI.
+2. Hard-refresh the frontend with `Ctrl+F5`.
+3. Open **Settings → Keybindings** and search for `Flow Wrangler` if you want to inspect or change its shortcuts.
+
+No new workflow node is added to the node library. Flow Wrangler extends the ComfyUI frontend editor.
+
+### Smart Connect a selected graph
+
+1. Load or arrange a disconnected workflow.
+2. Select the nodes you want Flow Wrangler to analyze.
+3. Press **`Shift+W`**.
+4. Review any inputs intentionally left unresolved.
+
+For a fast two-node connection, hold **Alt** and right-click the source node, then the target node. The gesture can also be used by dragging from source to target.
+
+---
+
+## What Smart Connect considers
+
+Smart Connect does more than compare registered ComfyUI socket types. Depending on the observable workflow context, it also considers:
+
+- input and output names
+- node roles and semantic hints
+- Positive and Negative Conditioning
+- MODEL and multi-stage LoRA transform chains
+- Pose, Depth, Canny, Lineart, Normal, Scribble and Segment control-image families
+- source, reference, generated, decoded and final IMAGE stages
+- workflow branches and existing topology
+- group, namespace, lane, scene, pair and target hints
+- relative node position
+- existing links and one-to-many fan-out
+- candidate confidence and the difference between competing candidates
+
+Hard constraints reject candidates that are clearly incompatible with the expected data role. Remaining candidates are ranked using the available graph and workflow evidence.
+
+### Conservative by design
+
+Flow Wrangler cannot know the intention behind every unknown third-party node.
+
+When several candidates remain too close to distinguish reliably, Smart Connect can keep the input disconnected instead of forcing a guess. A missing edge is visible and easy to correct; a plausible but semantically wrong edge can be much harder to notice.
+
+> **Wrong edge is usually more dangerous than missing edge.**
+
+---
+
+## Other productivity tools
+
+- **Alt + Right Click Smart Connect** — connect two nodes using type and workflow context.
+- **Swap Inputs** — press `Shift+S` to swap the first compatible pair of connected inputs.
+- **Output Reroute** — insert reroutes while preserving existing downstream connections.
+- **Data Flow Layout** — arrange selected nodes from sources through transforms to consumers and outputs.
+- **Batch Bypass** — toggle bypass state for a selection of nodes.
+- **ComfyUI Keybindings integration** — inspect or customize Flow Wrangler commands in ComfyUI settings.
+- **English and Simplified Chinese localization**.
+
+---
+
+## Test workflows and feedback
+
+The [`examples`](examples) directory contains disconnected workflows for testing Smart Connect with multi-branch image, ControlNet, IPAdapter, Ultimate Upscale, Wan video and mixed custom-node scenarios.
+
+Real-world test cases are welcome. When reporting a missed or incorrect connection, please include:
+
+- the workflow JSON with private prompts and local paths removed
+- the expected source and target sockets
+- the edge Flow Wrangler created, or the edge it left unresolved
+- your ComfyUI and frontend versions
+- the relevant custom-node package names
+
+Please use [GitHub Issues](https://github.com/Andy294753951/ComfyUI-Flow-Wrangler/issues) for reproducible bugs and workflow cases.
+
+---
+
+## Scope and limitations
+
+- Smart Connect is a graph-editing assistant, not a guarantee that every reconstructed workflow is executable.
+- It does not claim to support every ComfyUI custom node or infer every author's hidden intent.
+- Unknown or highly ambiguous nodes may need manual connections.
+- Always review reconstructed edges before running an unfamiliar workflow.
+
+Flow Wrangler is free and open source under the [MIT License](LICENSE).
+
+---
+
+<a id="中文文档"></a>
+
+## 中文文档
+
 **ComfyUI Flow Wrangler** 是一个面向 ComfyUI 节点工作流的前端效率扩展。
 
 它的目标是减少大型工作流中重复拉线、精确点选、批量重连、节点整理和旁路切换等机械操作，让用户可以更快地编辑复杂节点图。

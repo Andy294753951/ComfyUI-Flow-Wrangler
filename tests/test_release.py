@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.5"
+VERSION = "0.3.0"
 COMMAND_IDS = {
     "flow-wrangler.smart-connect",
     "flow-wrangler.swap-inputs",
@@ -33,7 +33,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(module.__version__, VERSION)
 
         javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")
-        self.assertIn(f'const EXTENSION_VERSION = "{VERSION}";', javascript)
+        self.assertIn(f'const EXTENSION_VERSION = "0.3.0";', javascript)
         self.assertIn(f"`v{VERSION}`", (ROOT / "README.md").read_text(encoding="utf-8"))
 
     def test_default_javascript_ui_contains_no_cjk_strings(self):
@@ -47,7 +47,13 @@ class ReleaseMetadataTests(unittest.TestCase):
             "sourcePolarity",
             "inputPolarity",
             "conditioningPolarityScore",
+            "titleAffinityScore",
+            "inputRoleScore",
+            "rootResourceScore",
             "const unused = candidates.filter",
+            "structuralIdentityScore",
+            "const strongDownstream = pool.filter",
+            "identityContext",
         ):
             self.assertIn(symbol, javascript)
 
