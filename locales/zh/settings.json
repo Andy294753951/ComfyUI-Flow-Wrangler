@@ -4,5 +4,14 @@
   },
   "Comfy_FlowWrangler_ReplaceConnectedInputs": {
     "name": "Flow Wrangler：智能连接可替换已有输入"
+  },
+  "Comfy_FlowWrangler_AIEnabled": {
+    "name": "Flow Wrangler：Shift+W 使用本地混合后端智能连接"
+  },
+  "Comfy_FlowWrangler_AIModel": {
+    "name": "Flow Wrangler：Ollama 兜底模型"
+  },
+  "Comfy_FlowWrangler_AIForceOllama": {
+    "name": "Flow Wrangler：强制使用 Ollama 兜底（仅测试）"
   }
 }

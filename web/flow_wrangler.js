@@ -1,14 +1,25 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 const EXTENSION_NAME = "Comfy.FlowWrangler";
-const EXTENSION_VERSION = "0.3.0";
+const EXTENSION_VERSION = "0.4.0";
 const SETTING_GESTURE = `${EXTENSION_NAME}.LazyConnectGesture`;
 const SETTING_REPLACE = `${EXTENSION_NAME}.ReplaceConnectedInputs`;
+const SETTING_AI_ENABLED = `${EXTENSION_NAME}.AIEnabled`;
+const SETTING_AI_MODEL = `${EXTENSION_NAME}.AIModel`;
+const SETTING_AI_FORCE_OLLAMA = `${EXTENSION_NAME}.AIForceOllama`;
+const DEFAULT_AI_MODEL = "qwen3:4b";
+const AI_MIN_CONFIDENCE = 0.72;
+const MAX_AI_CANDIDATES = 4096;
 const BYPASS_MODE = 4;
 const ALWAYS_MODE = 0;
 
 let gestureEnabled = true;
 let replaceConnectedInputs = false;
+let aiEnabled = false;
+let aiModel = DEFAULT_AI_MODEL;
+let aiForceOllama = false;
+let aiRequestActive = false;
 let lastPointer = { clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 };
 let lazyGesture = null;
 let pendingClickSource = null;
@@ -146,7 +157,7 @@ function semanticRoles(value) {
 
     add("refiner", /\brefiner\b/);
     add("base", /\bbase\b/);
-    add("reference", /\b(reference|ref)\b|\u53c2\u8003|\u53c2\u7167/);
+    add("reference", /\b(reference|ref)\b|ref\d|ref2va|\u53c2\u8003|\u53c2\u7167/);
     add("raw", /\b(raw|source|original|input)\b|\u539f\u56fe|\u6e90\u56fe/);
     add("result", /\b(result|output|final)\b|\u7ed3\u679c|\u8f93\u51fa|\u6700\u7ec8/);
     add("decoy", /\bdecoy\b|\u8bef\u5bfc|\u5e72\u6270/);
@@ -174,6 +185,14 @@ function semanticRoles(value) {
     add("animate", /\b(animate|animation)\b/);
     add("frame", /\b(frame|frames)\b/);
     add("prompt", /\b(prompt|positive|negative|pos|neg|uncond)\b|\u63d0\u793a/);
+    add("initial", /\b(first|initial|opening)\b|\u9996\u6bb5|\u9996\u5e27|\u8d77\u59cb/);
+    add("continuation", /\b(continue|continuation|extend|next)\b|motion.?context|\u7eed\u5199|\u7eed\u7247|\u5ef6\u7eed/);
+    add("directory", /\b(directory|folder|path)\b|\u76ee\u5f55|\u8def\u5f84/);
+    add("prefix", /\b(prefix)\b|\u524d\u7f00/);
+    add("seed", /\bseed\b|\u79cd\u5b50/);
+    add("index", /\b(index|count)\b|\u7d22\u5f15|\u6b21\u6570/);
+    add("load", /\b(load|loader|read)\b|\u52a0\u8f7d|\u8bfb\u53d6/);
+    add("save", /\b(save|writer|write)\b|\u4fdd\u5b58|\u5199\u5165/);
     return roles;
     });
 }
@@ -384,7 +403,8 @@ function nodeArchetype(node) {
     const type = String(node?.type ?? "").toLowerCase();
     const inputNames = new Set((node?.inputs ?? []).map((input) => normalizeName(input?.name ?? input?.label)));
     const outputTypes = new Set((node?.outputs ?? []).map((output) => normalizeType(output?.type)));
-    if (type.includes("saveimage") || type.includes("previewimage") || type.includes("savevideo")
+    if (type.includes("saveimage") || type.includes("previewimage") || type.includes("previewany")
+        || type.includes("showanything") || type.includes("displayanything") || type.includes("savevideo")
         || type.includes("videocombine") || type.includes("savegif") || type.includes("savewebp")
         || /\b(save image|preview image|save video)\b/.test(text)) return "sink";
     // LoRA nodes are MODEL/CLIP transformers, not root resource loaders. Treat
@@ -399,13 +419,18 @@ function nodeArchetype(node) {
         || type.includes("clipvisionloader") || type.includes("ipadaptermodelloader")
         || type.includes("upscalemodelloader") || type.includes("vaeloader")
         || type.includes("controlnetloader") || type.includes("modelpatchloader") || type.includes("loader")) return "loader";
+    const hasLatentInput = [...inputNames].some((name) => name.includes("latent"));
+    const hasConditioningInput = inputNames.has("conditioning") || inputNames.has("positive");
+    const hasGeneratedMediaOutput = [...outputTypes].some((value) => /IMAGE|VIDEO|AUDIO/.test(value));
+    if (hasLatentInput && hasConditioningInput && hasGeneratedMediaOutput) return "sampler";
     if (type.includes("ksampler") || type.includes("sampler") || type.includes("videodiffusion")
         || /\b(txt2img|text.?to.?image)\b/.test(text)) return "sampler";
     if (type.includes("vaedecode") || type.includes("wanvideodecode") || type.includes("latentdecode")
         || /\bdecode\b/.test(text)) return "decode";
     if (type.includes("vaeencode") || type.includes("wanvideoencode") || type.includes("latentencode")
         || (type.includes("encode") && !type.includes("textencode")) || /\bencode\b/.test(text)) return "encode";
-    if (type.includes("upscale") || /\b(upscale|upscaler|hires|superres)\b/.test(text)) return "upscale";
+    if (type.includes("upscale") || type.includes("superresolution")
+        || /\b(upscale|upscaler|hires|superres|super.?resolution)\b/.test(text)) return "upscale";
     // Model-transform adapters (including Anima LLLite) consume MODEL + patch/image
     // and produce a transformed MODEL. Classify them before generic animation text
     // matching so chained model transforms preserve their causal order.
@@ -415,17 +440,31 @@ function nodeArchetype(node) {
     if (type.includes("openpose") || type.includes("preprocessor") || type.includes("preprocess")
         || (rawControlFamilyFromText(type) && inputNames.has("image") && outputTypes.has("IMAGE")
             && !type.includes("encode") && !type.includes("apply"))) return "preprocess";
-    if (type.includes("composite") || type.includes("blend") || type.includes("merge") || type.includes("combine")
+    if (type.includes("composite") || type.includes("blend") || type.includes("merge")
+        || type.includes("combine") || type.includes("concat")
         || type.includes("colormatch") || /\b(composite|blend|merge|combine|concat|color\s*match)\b/.test(text)) return "composite";
     if (type.includes("clipsetlastlayer") || type.includes("cliptextencode") || type.includes("textencode")
         || type.includes("conditioningcombine") || /\bconditioning\b/.test(type)) return "conditioning";
-    if (type === "setnode" || type === "getnode") return "routing";
+    if (type === "setnode" || type === "getnode" || type.includes("switch") || type.includes("router")) return "routing";
     if (type.includes("animation") || type.includes("anima") || /\b(anima|animate|video output|final video)\b/.test(text)) return "animation";
     return "transform";
 }
 
 function slotSemantic(value) {
     const text = String(value ?? "").toLowerCase();
+    const name = normalizeName(value);
+    // ComfyUI commonly uses underscore/dotted socket paths (`audio_vae`,
+    // `ref_images.ref_image_0`). JavaScript word boundaries do not split on an
+    // underscore, so handle those normalized contracts before the prose regex.
+    if (name.includes("latent") || name === "samples" || name === "sample") return "latent";
+    if (name.includes("image") || name === "pixels" || name === "pixel"
+        || name === "firstframe" || name === "lastframe") return "image";
+    if (name.includes("mask")) return "mask";
+    if (name === "model" || name.endsWith("model") || name.startsWith("modeltooffload")) return "model";
+    if (name.includes("vae")) return "vae";
+    if (name.includes("conditioning") || name === "positive" || name === "negative"
+        || name === "uncond" || name === "textembeds") return "conditioning";
+    if (name.includes("audio") || name.includes("sound")) return "audio";
     if (/\b(samples?|latent|latent_image)\b/.test(text)) return "latent";
     if (/\b(images?|image_negative|pixels?|control_image)\b/.test(text)) return "image";
     if (/\b(mask|masks)\b/.test(text)) return "mask";
@@ -804,7 +843,7 @@ function typesCompatible(outputType, inputType) {
     if (out === "*" || input === "*" || out === input) return true;
     if (typeof LiteGraph.isValidConnection === "function") {
         try {
-            return LiteGraph.isValidConnection(outputType, inputType);
+            if (LiteGraph.isValidConnection(outputType, inputType)) return true;
         } catch (_) {
             // Fall back to the union-type check below.
         }
@@ -946,9 +985,17 @@ const DataStage = Object.freeze({
 
 let _reasonerCache = null;
 
+function serializedWidgetEntries(node) {
+    const values = node?.widgets_values;
+    if (Array.isArray(values)) return values.map((value, index) => [`widget_${index}`, value]);
+    if (values && typeof values === "object") return Object.entries(values);
+    return [];
+}
+
 function reasonerText(node, includeWidgets = false) {
     const shortWidgets = includeWidgets
-        ? (node?.widgets_values ?? [])
+        ? serializedWidgetEntries(node)
+            .map(([, value]) => value)
             .filter((value) => typeof value === "string" && value.length > 0 && value.length <= 96)
             .join(" ")
         : "";
@@ -988,6 +1035,7 @@ function sinkImageIntent(node) {
     const text = reasonerText(node, false).toLowerCase();
     const roles = semanticRoles(text);
     if (type.includes("saveimage") || type.includes("savevideo") || type.includes("savegif") || type.includes("savewebp")
+        || ((type.includes("videocombine") || type.includes("videowriter")) && roles.has("save"))
         || roles.has("result") || /\b(final|result|output)\b|\u6700\u7ec8|\u7ed3\u679c|\u8f93\u51fa/.test(text)) {
         return { kind: "final", family: null };
     }
@@ -1133,6 +1181,325 @@ function modelTransformPhase(node) {
     return 20;
 }
 
+function dimensionAxis(value) {
+    const name = normalizeName(value);
+    if (!name) return null;
+    if (/(?:^|[^a-z])width(?:$|[^a-z])/.test(String(value ?? "").toLowerCase()) || name === "width") return "width";
+    if (/(?:^|[^a-z])height(?:$|[^a-z])/.test(String(value ?? "").toLowerCase()) || name === "height") return "height";
+    if (name === "batchsize" || name === "batch") return "batch";
+    if (name === "length" || name === "frames" || name === "framecount") return "length";
+    return null;
+}
+
+function dimensionAxisForOutput(node, outputIndex) {
+    const output = node?.outputs?.[outputIndex];
+    const direct = dimensionAxis(output?.name ?? output?.label);
+    if (direct) return direct;
+    const inputAxes = (node?.inputs ?? []).map((input) => dimensionAxis(input?.name ?? input?.label));
+    if (inputAxes.includes("width") && inputAxes.includes("height")) {
+        const scalarOutputs = (node?.outputs ?? [])
+            .map((slot, index) => ({ index, type: normalizeType(slot?.type) }))
+            .filter((entry) => /^(INT|FLOAT)$/.test(entry.type));
+        const ordinal = scalarOutputs.findIndex((entry) => entry.index === outputIndex);
+        if (ordinal === 0) return "width";
+        if (ordinal === 1) return "height";
+    }
+    return null;
+}
+
+function modalityFromText(value) {
+    const text = String(value ?? "").toLowerCase();
+    if (/audio[_\s-]*vae|vae[_\s-]*audio|audio.*\.safetensors/.test(text)) return "audio";
+    if (/video[_\s-]*vae|vae[_\s-]*video|video.*\.safetensors/.test(text)) return "video";
+    if (/image[_\s-]*vae|vae[_\s-]*image/.test(text)) return "image";
+    return null;
+}
+
+function vaeModalityForSource(node, outputIndex) {
+    const output = node?.outputs?.[outputIndex];
+    const explicit = modalityFromText(`${output?.name ?? ""} ${output?.label ?? ""}`);
+    if (explicit) return explicit;
+
+    // Multi-model loaders often expose several identically typed VAE sockets
+    // whose semantic names survive only in their filename widgets. Pair the
+    // VAE output ordinal with the VAE widget ordinal before falling back to the
+    // node-level text, which would incorrectly label every socket as audio.
+    const vaeOutputs = (node?.outputs ?? [])
+        .map((slot, index) => ({ slot, index }))
+        .filter((entry) => normalizeType(entry.slot?.type) === "VAE");
+    const vaeOrdinal = vaeOutputs.findIndex((entry) => entry.index === outputIndex);
+    if (vaeOrdinal >= 0) {
+        const vaeWidgets = serializedWidgetEntries(node)
+            .map(([, value]) => value)
+            .filter((value) => typeof value === "string" && /vae/i.test(value));
+        const byOrdinal = modalityFromText(vaeWidgets[vaeOrdinal]);
+        if (byOrdinal) return byOrdinal;
+    }
+
+    const text = reasonerText(node, true).toLowerCase();
+    return modalityFromText(text);
+}
+
+function vaeModalityForTarget(target, input) {
+    const inputName = normalizeName(input?.name ?? input?.label);
+    const text = `${target?.type ?? ""} ${target?.title ?? ""}`.toLowerCase();
+    if (inputName.includes("audiovae") || /vaedecodeaudio|audiovaedecode/.test(text)) return "audio";
+    if (/^vae\d+$/.test(inputName) && (target?.outputs ?? []).some((output) => normalizeType(output?.type).includes("AUDIO"))) {
+        return "audio";
+    }
+    if (inputName === "vae" && (/video|image/.test(text) || /vaedecode/.test(text))) return "visual";
+    if (inputName === "vae" && (target?.outputs ?? []).some((output) => /IMAGE|VIDEO/.test(normalizeType(output?.type)))) {
+        return "visual";
+    }
+    return null;
+}
+
+function indexedInputFamily(input) {
+    const name = normalizeName(input?.name ?? input?.label);
+    if (!name) return null;
+    if (name.startsWith("refvideoaudiosrefvideoaudio")) return "reference-video-audio";
+    if (name.startsWith("refaudiosrefaudio")) return "reference-audio";
+    if (name.startsWith("refvideosrefvideo")) return "reference-video";
+    if (name.startsWith("refimagesrefimage")) return "reference-image";
+    if (name === "firstframe" || name === "lastframe") return "endpoint-frame";
+    if (/^image\d+$/.test(name)) return "aggregate-image";
+    if (/^any\d+$/.test(name)) return "switch-input";
+    return null;
+}
+
+function aiWidgetCandidateAllowed(source, outputIndex, target, inputIndex) {
+    const input = target?.inputs?.[inputIndex];
+    const output = source?.outputs?.[outputIndex];
+    if (!input?.widget || !output) return true;
+    const sourceName = normalizeName(output.name ?? output.label);
+    const targetName = normalizeName(input.name ?? input.label);
+    if (sourceName && targetName && sourceName === targetName) return true;
+    const targetAxis = dimensionAxis(input.name ?? input.label);
+    const sourceAxis = dimensionAxisForOutput(source, outputIndex);
+    if (targetAxis && sourceAxis === targetAxis) return true;
+    const sourceText = reasonerText(source, false).toLowerCase();
+    if (targetAxis && /conditional.*branch|branch.*conditional|select|switch/.test(sourceText)) return true;
+    if ((targetName === "length" || targetName === "framecount" || targetName === "frames")
+        && /math|expression|frame.?count|length/.test(sourceText)) return true;
+    if (targetName === "cond" && isScalarConditionalBranch(target)
+        && normalizeType(output.type) === "BOOLEAN") return true;
+    if ((targetName === "prompt" || targetName === "text")
+        && normalizeType(output.type) === "STRING"
+        && /primitive.*string|string.*primitive|prompt|text/.test(sourceText)) return true;
+    // Converted widgets are regular graph sockets once a cable is present.
+    // Exact runtime types are safe to expose to the AI candidate resolver; the
+    // deterministic fallback still leaves generic scalar widgets untouched.
+    return typesCompatible(output.type, input.type);
+}
+
+function aiInputEligible(target, input) {
+    if (!input) return false;
+    const targetText = `${target?.type ?? ""} ${target?.title ?? ""}`.toLowerCase();
+    if (/deprecated|abandoned|unused|\u5df2\u5f03\u7528|\u5e9f\u5f03\u8282\u70b9/.test(targetText)) return false;
+    if (!input.widget) return true;
+
+    // A converted widget is present in `node.inputs`; an ordinary UI-only
+    // widget is not. Every type-valid converted widget is therefore a real
+    // graph socket and must remain available to the local resolver.
+    return true;
+}
+
+function selectedReasonerNodes() {
+    return activeSelectionContext?.all?.map((entry) => entry.node) ?? [];
+}
+
+function isScalarConditionalBranch(node) {
+    const inputs = new Set((node?.inputs ?? []).map((input) => normalizeName(input?.name ?? input?.label)));
+    const output = node?.outputs?.[0];
+    return inputs.has("ttvalue") && inputs.has("ffvalue") && inputs.has("cond")
+        && Boolean(output) && /^(INT|FLOAT)$/.test(normalizeType(output.type));
+}
+
+function inferredConditionalAxis(node) {
+    if (!isScalarConditionalBranch(node)) return null;
+    const nodes = selectedReasonerNodes();
+    const siblings = nodes.filter((candidate) => candidate?.type === node?.type && isScalarConditionalBranch(candidate));
+    if (siblings.length !== 2) return null;
+    const producerAxes = new Set(nodes.flatMap((candidate) => (candidate?.outputs ?? [])
+        .map((output) => dimensionAxis(output?.name ?? output?.label)).filter(Boolean)));
+    const consumerAxes = new Set(nodes.flatMap((candidate) => (candidate?.inputs ?? [])
+        .map((input) => dimensionAxis(input?.name ?? input?.label)).filter(Boolean)));
+    if (!producerAxes.has("width") || !producerAxes.has("height")
+        || !consumerAxes.has("width") || !consumerAxes.has("height")) return null;
+    siblings.sort((a, b) => (Number.isFinite(a?.order) ? a.order : Number.MAX_SAFE_INTEGER)
+        - (Number.isFinite(b?.order) ? b.order : Number.MAX_SAFE_INTEGER)
+        || (a.pos?.[0] ?? 0) - (b.pos?.[0] ?? 0)
+        || (a.pos?.[1] ?? 0) - (b.pos?.[1] ?? 0));
+    return siblings[0] === node ? "width" : "height";
+}
+
+function inferredScalarDisplayAxis(node) {
+    const type = String(node?.type ?? "").toLowerCase();
+    if (!/show.*anything|display.*anything|debug.*value/.test(type)) return null;
+    const nodes = selectedReasonerNodes();
+    const siblings = nodes.filter((candidate) => String(candidate?.type ?? "").toLowerCase() === type);
+    if (siblings.length !== 2) return null;
+    const producerAxes = new Set(nodes.flatMap((candidate) => (candidate?.outputs ?? [])
+        .map((output) => dimensionAxis(output?.name ?? output?.label)).filter(Boolean)));
+    if (!producerAxes.has("width") || !producerAxes.has("height")) return null;
+    siblings.sort((a, b) => (a.pos?.[1] ?? 0) - (b.pos?.[1] ?? 0)
+        || (a.pos?.[0] ?? 0) - (b.pos?.[0] ?? 0));
+    return siblings[0] === node ? "width" : "height";
+}
+
+function hasAxisConditionalProducer(target, input, axis) {
+    if (!axis) return false;
+    const tx = target?.pos?.[0] ?? 0;
+    return selectedReasonerNodes().some((node) => node !== target
+        && inferredConditionalAxis(node) === axis
+        && (node.pos?.[0] ?? 0) < tx + 12
+        && (node.outputs ?? []).some((output) => typesCompatible(output?.type, input?.type)));
+}
+
+function dimensionProducerMode(node) {
+    const outputAxes = new Set((node?.outputs ?? [])
+        .map((output) => dimensionAxis(output?.name ?? output?.label)).filter(Boolean));
+    if (!outputAxes.has("width") || !outputAxes.has("height")) return null;
+    const hasImageInput = (node?.inputs ?? []).some((input) => normalizeType(input?.type).includes("IMAGE"));
+    return hasImageInput ? "dynamic" : "static";
+}
+
+function hasDimensionProducerMode(mode, inputType) {
+    return selectedReasonerNodes().some((node) => dimensionProducerMode(node) === mode
+        && (node.outputs ?? []).some((output) => typesCompatible(output?.type, inputType)));
+}
+
+function hasRawLoaderProducerForInput(target, input) {
+    return selectedReasonerNodes().some((node) => node !== target
+        && nodeArchetype(node) === "loader"
+        && (node.outputs ?? []).some((output) => typesCompatible(output?.type, input?.type)));
+}
+
+function hasRoutingProducerForInput(target, input) {
+    const tx = target?.pos?.[0] ?? 0;
+    return selectedReasonerNodes().some((node) => node !== target
+        && nodeArchetype(node) === "routing"
+        && (node.pos?.[0] ?? 0) < tx + 24
+        && (node.outputs ?? []).some((output) => typesCompatible(output?.type, input?.type)));
+}
+
+function hasProcessedImageProducerForInput(target, input) {
+    const tx = target?.pos?.[0] ?? 0;
+    return selectedReasonerNodes().some((node) => {
+        const kind = nodeArchetype(node);
+        return node !== target && !["loader", "sink", "preprocess"].includes(kind)
+            && (node.pos?.[0] ?? 0) < tx + 24
+            && (node.outputs ?? []).some((output) => normalizeType(output?.type).includes("IMAGE")
+                && typesCompatible(output?.type, input?.type));
+    });
+}
+
+function terminalModelTransformForTarget(target, input) {
+    const tx = target?.pos?.[0] ?? 0;
+    const transforms = selectedReasonerNodes().filter((node) => node !== target
+        && nodeArchetype(node) === "adapter"
+        && explicitBranchCompatible(node, target)
+        && (node.pos?.[0] ?? 0) <= tx + 12
+        && (node.outputs ?? []).some((output) => typesCompatible(output?.type, input?.type)));
+    if (!transforms.length) return null;
+    transforms.sort((a, b) => (b.pos?.[0] ?? 0) - (a.pos?.[0] ?? 0));
+    return transforms[0];
+}
+
+function terminalClipTransformForTarget(target, input) {
+    const tx = target?.pos?.[0] ?? 0;
+    const transforms = selectedReasonerNodes().filter((node) => node !== target
+        && nodeArchetype(node) === "adapter"
+        && explicitBranchCompatible(node, target)
+        && (node.pos?.[0] ?? 0) <= tx + 12
+        && (node.inputs ?? []).some((slot) => normalizeType(slot?.type).includes("CLIP"))
+        && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)
+            && normalizeType(slot?.type).includes("CLIP")));
+    transforms.sort((a, b) => (b.pos?.[0] ?? 0) - (a.pos?.[0] ?? 0)
+        || Math.abs((a.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0))
+            - Math.abs((b.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0)));
+    return transforms[0] ?? null;
+}
+
+function terminalConditioningTransformForTarget(target, input) {
+    const tx = target?.pos?.[0] ?? 0;
+    const targetRoles = semanticRoles(reasonerText(target, false));
+    let candidates = selectedReasonerNodes().filter((node) => node !== target
+        && (node?.pos?.[0] ?? 0) <= tx + 12
+        && (node.inputs ?? []).some((slot) => normalizeType(slot?.type).includes("CONDITIONING"))
+        && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)
+            && normalizeType(slot?.type).includes("CONDITIONING")));
+    for (const role of ["initial", "continuation"]) {
+        if (!targetRoles.has(role)) continue;
+        const opposite = role === "initial" ? "continuation" : "initial";
+        const withoutOpposite = candidates.filter((node) => !semanticRoles(reasonerText(node, false)).has(opposite));
+        if (withoutOpposite.length) candidates = withoutOpposite;
+        const sameBranch = candidates.filter((node) => semanticRoles(reasonerText(node, false)).has(role));
+        if (sameBranch.length) candidates = sameBranch;
+    }
+    candidates.sort((a, b) => (b.pos?.[0] ?? 0) - (a.pos?.[0] ?? 0)
+        || Math.abs((a.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0))
+            - Math.abs((b.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0)));
+    return candidates[0] ?? null;
+}
+
+function terminalUpscaleForTarget(target, input) {
+    const finalSink = sinkImageIntent(target).kind === "final";
+    let candidates = selectedReasonerNodes().filter((node) => node !== target
+        && nodeArchetype(node) === "upscale"
+        // Save/final nodes frequently use descriptive titles rather than the
+        // branch name (for example "date-based save"). Do not interpret that
+        // prose prefix as a conflicting namespace. Generic previews still use
+        // explicit branch compatibility and soft geometry below.
+        && (finalSink || explicitBranchCompatible(node, target))
+        && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)));
+    const targetRoles = semanticRoles(reasonerText(target, false));
+    for (const branchRole of ["initial", "continuation"]) {
+        if (!targetRoles.has(branchRole)) continue;
+        const sameBranch = candidates.filter((node) =>
+            semanticRoles(reasonerText(node, false)).has(branchRole)
+        );
+        if (sameBranch.length) candidates = sameBranch;
+    }
+    candidates.sort((a, b) => {
+        const adx = Math.abs((a.pos?.[0] ?? 0) - (target?.pos?.[0] ?? 0));
+        const bdx = Math.abs((b.pos?.[0] ?? 0) - (target?.pos?.[0] ?? 0));
+        const ady = Math.abs((a.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0));
+        const bdy = Math.abs((b.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0));
+        return adx + ady - bdx - bdy;
+    });
+    return candidates[0] ?? null;
+}
+
+function preferredLengthProducer(target, input) {
+    const candidates = selectedReasonerNodes().filter((node) => node !== target
+        && /math|expression/.test(String(node?.type ?? "").toLowerCase())
+        && /round|ceil|floor|frames?|fps|\b2[45]\b/.test(reasonerText(node, true).toLowerCase())
+        && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)));
+    candidates.sort((a, b) => {
+        const ad = Math.abs((a.pos?.[0] ?? 0) - (target?.pos?.[0] ?? 0))
+            + Math.abs((a.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0));
+        const bd = Math.abs((b.pos?.[0] ?? 0) - (target?.pos?.[0] ?? 0))
+            + Math.abs((b.pos?.[1] ?? 0) - (target?.pos?.[1] ?? 0));
+        return ad - bd;
+    });
+    return candidates[0] ?? null;
+}
+
+function preferredAggregatePromptProducer(target, input) {
+    if (!semanticRoles(reasonerText(target, false)).has("reference")) return null;
+    const candidates = selectedReasonerNodes().filter((node) => node !== target
+        && nodeArchetype(node) === "composite"
+        && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)));
+    candidates.sort((a, b) => {
+        const aOutput = (a.outputs ?? []).find((slot) => typesCompatible(slot?.type, input?.type));
+        const bOutput = (b.outputs ?? []).find((slot) => typesCompatible(slot?.type, input?.type));
+        return cjkBigramAffinity(b, bOutput, target, input) - cjkBigramAffinity(a, aOutput, target, input);
+    });
+    const best = candidates[0];
+    return best ?? null;
+}
+
 /**
  * Conservative hard gate.
  *
@@ -1153,6 +1520,248 @@ function validateHardConstraints(source, outputIndex, target, inputIndex, ctx = 
     const targetKind = nodeArchetype(target);
     const inputRole = slotSemantic(input.name ?? input.label);
     const sourceStage = localDataStage(source, outputIndex);
+    const normalizedInputName = normalizeName(input.name ?? input.label);
+    const normalizedOutputName = normalizeName(output.name ?? output.label);
+
+    // Explicit namespace/scene labels are strong ownership contracts for CLIP
+    // encoders. Geometry alone must not let SCENE-01's checkpoint feed a
+    // SCENE-02 prompt when a same-scene CLIP producer exists.
+    if (inputRole === "text_model" && !explicitBranchCompatible(source, target)) {
+        return { allowed: false, reason: "cross-branch-text-model" };
+    }
+
+    // Scalar socket types are deliberately broad in ComfyUI. An INT called
+    // `width` is not interchangeable with an INT called `height` just because
+    // the runtime type matches. Keep unknown/generic scalar outputs available,
+    // but reject explicit cross-axis candidates before scoring or AI inference.
+    const sourceAxis = dimensionAxisForOutput(source, outputIndex) ?? inferredConditionalAxis(source);
+    const targetAxis = dimensionAxis(input.name ?? input.label);
+    if (sourceAxis && targetAxis && sourceAxis !== targetAxis) {
+        return { allowed: false, reason: `dimension-axis:${sourceAxis}->${targetAxis}` };
+    }
+    const targetBranchAxis = inferredConditionalAxis(target);
+    const displayAxis = inferredScalarDisplayAxis(target);
+    const inferredTargetAxis = targetBranchAxis ?? displayAxis;
+    if (displayAxis && !sourceAxis) {
+        return { allowed: false, reason: `display-axis-source-required:${displayAxis}` };
+    }
+    if (inferredTargetAxis && sourceAxis && sourceAxis !== inferredTargetAxis) {
+        return { allowed: false, reason: `inferred-axis:${sourceAxis}->${inferredTargetAxis}` };
+    }
+    if (targetBranchAxis) {
+        const branchInput = normalizeName(input.name ?? input.label);
+        const sourceMode = dimensionProducerMode(source);
+        if (branchInput === "ttvalue" && hasDimensionProducerMode("dynamic", input.type)
+            && sourceMode && sourceMode !== "dynamic") {
+            return { allowed: false, reason: "conditional-true-prefers-dynamic-dimension" };
+        }
+        if (branchInput === "ffvalue" && hasDimensionProducerMode("static", input.type)
+            && sourceMode && sourceMode !== "static") {
+            return { allowed: false, reason: "conditional-false-prefers-static-dimension" };
+        }
+    }
+    if (targetAxis && hasAxisConditionalProducer(target, input, targetAxis)
+        && inferredConditionalAxis(source) !== targetAxis) {
+        return { allowed: false, reason: `conditional-axis-owner:${targetAxis}` };
+    }
+
+    // VAE is another overloaded type. Model filenames provide reliable local
+    // evidence for audio vs visual VAEs even for unfamiliar third-party nodes.
+    // This is a contract check, not a MiniMax-specific node-name allow-list.
+    if (inputRole === "vae") {
+        const sourceModality = vaeModalityForSource(source, outputIndex);
+        const targetModality = vaeModalityForTarget(target, input);
+        if (targetModality === "audio" && sourceModality && sourceModality !== "audio") {
+            return { allowed: false, reason: "audio-vae-required" };
+        }
+        if (targetModality === "visual" && sourceModality === "audio") {
+            return { allowed: false, reason: "visual-vae-required" };
+        }
+        if (input?.shape === 7 && targetKind === "sink") {
+            return { allowed: false, reason: "optional-sink-vae" };
+        }
+    }
+
+    const targetText = reasonerText(target, false).toLowerCase();
+    const inputCarriesImage = inputRole === "image" || normalizeType(input.type).includes("IMAGE");
+    if (inputCarriesImage && indexedInputFamily(input) === "switch-input"
+        && hasRawLoaderProducerForInput(target, input) && sourceKind !== "loader") {
+        return { allowed: false, reason: "raw-routing-input-preferred" };
+    }
+    if (inputCarriesImage && indexedInputFamily(input) === "endpoint-frame"
+        && hasRawLoaderProducerForInput(target, input) && sourceKind !== "loader") {
+        return { allowed: false, reason: "raw-endpoint-frame-preferred" };
+    }
+    if (inputCarriesImage && /scale|resize/.test(targetText)
+        && hasRoutingProducerForInput(target, input) && sourceKind !== "routing") {
+        return { allowed: false, reason: "image-transform-prefers-router" };
+    }
+    const targetOutputAxes = new Set((target.outputs ?? [])
+        .map((slot) => dimensionAxis(slot?.name ?? slot?.label)).filter(Boolean));
+    if (inputCarriesImage && targetOutputAxes.has("width") && targetOutputAxes.has("height")
+        && hasProcessedImageProducerForInput(target, input) && sourceKind === "loader") {
+        return { allowed: false, reason: "dimension-probe-prefers-processed-image" };
+    }
+    if (/mathexpression|math.*expression/.test(targetText)
+        && normalizeName(input.name ?? input.label) === "valuesa") {
+        const hasPrimitive = selectedReasonerNodes().some((node) => /^primitive/i.test(String(node?.type ?? ""))
+            && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input.type)));
+        if (hasPrimitive && !/^primitive/i.test(String(source?.type ?? ""))) {
+            return { allowed: false, reason: "math-value-prefers-primitive" };
+        }
+        const expression = reasonerText(target, true).toLowerCase();
+        const hasNumericPrimitive = selectedReasonerNodes().some((node) => /^primitive(?:float|int)/i.test(String(node?.type ?? ""))
+            && (node.outputs ?? []).some((slot) => /^(FLOAT|INT)$/.test(normalizeType(slot?.type))));
+        if (hasNumericPrimitive && /[+\-*/]|\b(?:round|max|min|ceil|floor|abs)\b/.test(expression)
+            && normalizeType(output.type) === "BOOLEAN") {
+            return { allowed: false, reason: "numeric-expression-rejects-boolean" };
+        }
+    }
+    if (/mathexpression|math.*expression/.test(targetText)) {
+        const variableMatch = /^values([a-z])$/.exec(normalizeName(input.name ?? input.label));
+        if (variableMatch) {
+            const expression = serializedWidgetEntries(target)
+                .map(([, value]) => value)
+                .find((value) => typeof value === "string") ?? "";
+            const variablePattern = new RegExp(`\\b${variableMatch[1]}\\b`, "i");
+            if (expression && !variablePattern.test(expression)) {
+                return { allowed: false, reason: `unused-expression-variable:${variableMatch[1]}` };
+            }
+        }
+    }
+
+    if (normalizedInputName === "length" || normalizedInputName === "framecount") {
+        const preferred = preferredLengthProducer(target, input);
+        if (preferred && source !== preferred) {
+            return { allowed: false, reason: "computed-frame-length-preferred" };
+        }
+    }
+
+    if (normalizedInputName === "prompt") {
+        const preferred = preferredAggregatePromptProducer(target, input);
+        if (preferred && source !== preferred) {
+            return { allowed: false, reason: "aggregate-reference-prompt-preferred" };
+        }
+    }
+
+    if (targetKind === "sampler" && /^(image|images|audio)$/.test(normalizedInputName)) {
+        const targetRoles = semanticRoles(reasonerText(target, false));
+        const sourceRoles = semanticRoles(reasonerText(source, false));
+        if (targetRoles.has("initial") && sourceRoles.has("continuation")) {
+            return { allowed: false, reason: "cross-branch-auxiliary-media" };
+        }
+    }
+
+    if (targetKind === "sampler" && inputRole === "latent") {
+        const targetRoles = semanticRoles(reasonerText(target, false));
+        const sourceRoles = semanticRoles(reasonerText(source, false));
+        if (!targetRoles.has("initial") && !targetRoles.has("reference") && sourceRoles.has("reference")) {
+            const neutralSibling = selectedReasonerNodes().some((node) => node !== source && node !== target
+                && node?.type === source?.type
+                && !semanticRoles(reasonerText(node, false)).has("reference")
+                && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input?.type)));
+            if (neutralSibling) return { allowed: false, reason: "reference-latent-branch-owner" };
+        }
+    }
+
+    const referenceFamily = indexedInputFamily(input);
+    if (referenceFamily?.startsWith("reference-")
+        && !semanticRoles(reasonerText(target, false)).has("reference")) {
+        const explicitSibling = selectedReasonerNodes().some((node) => node !== target
+            && node?.type === target?.type
+            && semanticRoles(reasonerText(node, false)).has("reference")
+            && (node.inputs ?? []).some((slot) => indexedInputFamily(slot) === referenceFamily));
+        if (explicitSibling) return { allowed: false, reason: "explicit-reference-branch-owner" };
+    }
+
+    // A reference-video socket uses IMAGE as a frame sequence transport, but a
+    // single LoadImage is still not a video. Require the producer contract to
+    // carry video/frame-sequence evidence; ordinary images belong in ref_images.
+    if (normalizedInputName.startsWith("refvideosrefvideo")) {
+        const mediaText = reasonerText(source, true).toLowerCase();
+        if (!/video|frames?|sequence|vhs/.test(mediaText)) {
+            return { allowed: false, reason: "reference-video-source-required" };
+        }
+    }
+    if (normalizedInputName.startsWith("refvideoaudiosrefvideoaudio")) {
+        const mediaText = reasonerText(source, true).toLowerCase();
+        if (!/video|vhs/.test(mediaText)) {
+            return { allowed: false, reason: "reference-video-audio-source-required" };
+        }
+    }
+
+    // SamplerCustomAdvanced exposes both the normal trajectory result and a
+    // denoised diagnostic output with the same LATENT type. For a plain decode
+    // `samples` contract, prefer the explicitly primary `output` when present.
+    // Nodes that only expose a denoised output remain supported.
+    if (targetKind === "decode" && inputRole === "latent"
+        && normalizedOutputName.includes("denoised")
+        && (source.outputs ?? []).some((slot, index) => index !== outputIndex
+            && normalizeName(slot?.name ?? slot?.label) === "output"
+            && typesCompatible(slot?.type, input.type))) {
+        return { allowed: false, reason: "decode-prefers-primary-sampler-output" };
+    }
+
+    // A wildcard output is useful for interactive routing nodes, but it carries
+    // no data-role evidence. Letting it feed every typed input is the fastest
+    // way to turn an unfamiliar workflow into a fully connected wrong graph.
+    // Typed switch outputs remain eligible; only an actually-untyped output is
+    // rejected here.
+    if (normalizeType(output.type) === "*" && normalizeType(input.type) !== "*") {
+        return { allowed: false, reason: "untyped-wildcard-source" };
+    }
+
+    const sourceText = `${source?.type ?? ""} ${source?.title ?? ""}`.toLowerCase();
+    if (/group.*(?:bypass|mute)|(?:bypass|mute).*group/.test(sourceText)) {
+        return { allowed: false, reason: "ui-group-control-source" };
+    }
+
+    const targetTypeText = String(target?.type ?? "").toLowerCase();
+    if (/forloopstart/.test(targetTypeText) && normalizedInputName.startsWith("initialvalue")
+        && /forloopend/.test(String(source?.type ?? "").toLowerCase())) {
+        return { allowed: false, reason: "loop-end-is-not-initializer" };
+    }
+    if (/forloopstart/.test(targetTypeText) && normalizedInputName.startsWith("initialvalue")) {
+        const sourceType = normalizeType(output.type);
+        if ((source?.pos?.[0] ?? 0) <= (target?.pos?.[0] ?? 0)
+            || /^(INT|FLOAT|BOOLEAN)$/.test(sourceType)) {
+            return { allowed: false, reason: "invalid-loop-initializer" };
+        }
+    }
+    if (/forloopend/.test(targetTypeText) && normalizedInputName.startsWith("initialvalue")) {
+        const sourceType = normalizeType(output.type);
+        if ((source?.pos?.[0] ?? 0) >= (target?.pos?.[0] ?? 0)
+            || /^(INT|FLOAT|BOOLEAN|FLOW_CONTROL)$/.test(sourceType)
+            || /forloopstart/.test(String(source?.type ?? "").toLowerCase())) {
+            return { allowed: false, reason: "invalid-loop-state" };
+        }
+    }
+
+    if (/deprecated|abandoned|unused|\u5df2\u5f03\u7528|\u5e9f\u5f03\u8282\u70b9/.test(sourceText)) {
+        return { allowed: false, reason: "deprecated-source" };
+    }
+
+    const sourceTypeText = String(source?.type ?? "").toLowerCase();
+    if (/previewany|showanything|displayanything/.test(sourceTypeText)) {
+        return { allowed: false, reason: "display-source" };
+    }
+
+    if (targetKind === "composite" && inputCarriesImage && /image\d+/.test(normalizedInputName)
+        && hasRawLoaderProducerForInput(target, input) && sourceKind !== "loader") {
+        return { allowed: false, reason: "image-aggregate-prefers-loaders" };
+    }
+
+    const targetConsumesAndProducesConditioning = inputRole === "conditioning"
+        && (target?.outputs ?? []).some((slot) => normalizeType(slot?.type).includes("CONDITIONING"));
+    if (targetConsumesAndProducesConditioning
+        && /refstrength/.test(String(target?.type ?? "").toLowerCase())
+        && /refstrength/.test(String(source?.type ?? "").toLowerCase())) {
+        return { allowed: false, reason: "parallel-reference-strength-modifier" };
+    }
+    if (targetConsumesAndProducesConditioning
+        && (source?.pos?.[0] ?? 0) > (target?.pos?.[0] ?? 0) + 12) {
+        return { allowed: false, reason: "downstream-conditioning-source" };
+    }
 
     // Optional MASK sockets are frequently technical overrides (LLLite masks,
     // regional masks, etc.). Filling them merely because a LoadImage exposes a
@@ -1191,11 +1800,54 @@ function validateHardConstraints(source, outputIndex, target, inputIndex, ctx = 
         // A lower-phase loader/LoRA may legitimately be placed to the right of
         // a later Apply node. Only use geometry as a hard direction constraint
         // when phase information cannot establish the causal order.
-        if (sourcePhase > targetPhase && targetPhase > 0) {
+        // Explicit Apply nodes usually follow loaders/LoRAs, but generic model
+        // patches and LoRAs can legally appear in either order. Geometry is the
+        // safer hard constraint for those unfamiliar transform chains.
+        if (sourcePhase === 30 && targetPhase > 0 && targetPhase < 30 && sourceIsLater) {
             return { allowed: false, reason: "reverse-model-transform-phase" };
         }
-        if (sourceIsLater && !(sourcePhase > 0 && targetPhase > sourcePhase)) {
+        if (sourceIsLater && !(targetPhase === 30 && sourcePhase > 0 && sourcePhase < 30)) {
             return { allowed: false, reason: "downstream-model-transform" };
+        }
+    }
+
+    if (inputRole === "model" && targetKind !== "adapter") {
+        const terminalTransform = terminalModelTransformForTarget(target, input);
+        if (terminalTransform && source !== terminalTransform) {
+            return { allowed: false, reason: "terminal-model-transform-preferred" };
+        }
+    }
+
+    if (inputRole === "text_model" && normalizeType(input.type).includes("CLIP") && targetKind !== "adapter") {
+        const terminalTransform = terminalClipTransformForTarget(target, input);
+        if (terminalTransform && source !== terminalTransform) {
+            return { allowed: false, reason: "terminal-clip-transform-preferred" };
+        }
+    }
+
+    const wantedPolarity = inputPolarity(target, inputIndex);
+    const offeredPolarity = sourcePolarity(source, outputIndex);
+    if (wantedPolarity !== "neutral" && offeredPolarity !== "neutral"
+        && wantedPolarity !== offeredPolarity) {
+        return { allowed: false, reason: `conditioning-polarity:${offeredPolarity}->${wantedPolarity}` };
+    }
+
+    if (inputRole === "conditioning" && targetKind === "sampler") {
+        const terminalConditioner = terminalConditioningTransformForTarget(target, input);
+        if (terminalConditioner && source !== terminalConditioner) {
+            return { allowed: false, reason: "terminal-conditioning-transform-preferred" };
+        }
+    }
+
+    if (inputRole === "image" && targetKind === "sink") {
+        // Only an explicitly final/save sink owns the terminal post-process
+        // result. Generic PreviewImage nodes may intentionally inspect an
+        // earlier decode, so they must remain a geometry/semantics decision.
+        if (sinkImageIntent(target).kind === "final") {
+            const terminalUpscale = terminalUpscaleForTarget(target, input);
+            if (terminalUpscale && source !== terminalUpscale) {
+                return { allowed: false, reason: "terminal-upscale-preferred" };
+            }
         }
     }
 
@@ -1294,6 +1946,28 @@ function wouldCreateCycle(source, target) {
         }
     }
     return false;
+}
+
+function allowsContextFeedbackCycle(source, outputIndex, target, inputIndex) {
+    const output = source?.outputs?.[outputIndex];
+    const input = target?.inputs?.[inputIndex];
+    const mediaType = normalizeType(output?.type);
+    if (!output || !input || mediaType !== normalizeType(input.type)
+        || !["IMAGE", "AUDIO"].includes(mediaType)) return false;
+
+    const sourceText = reasonerText(source, true).toLowerCase();
+    const targetText = reasonerText(target, true).toLowerCase();
+    const trim = /motion\s*context\s*trim|minimaxh3motioncontexttrim/.test(sourceText)
+        ? source
+        : /motion\s*context\s*trim|minimaxh3motioncontexttrim/.test(targetText) ? target : null;
+    const sampler = trim === source ? target : trim === target ? source : null;
+    if (!trim || !sampler) return false;
+
+    const samplerInputs = sampler.inputs ?? [];
+    const samplerOutputs = sampler.outputs ?? [];
+    return samplerInputs.some((slot) => normalizeType(slot?.type) === mediaType)
+        && samplerOutputs.some((slot) => normalizeType(slot?.type) === mediaType)
+        && samplerInputs.some((slot) => ["LATENT", "MODEL", "CONDITIONING"].includes(normalizeType(slot?.type)));
 }
 
 
@@ -1403,9 +2077,49 @@ function modelTransformChainScore(source, target, inputIndex, ctx = _reasonerCac
     return 0;
 }
 
-function globalCandidateScore(source, outputIndex, target, inputIndex, reusedForTarget = false) {
+function aiRecoverableGate(source, outputIndex, target, inputIndex, reason) {
+    const output = source?.outputs?.[outputIndex];
+    const input = target?.inputs?.[inputIndex];
+    if (!output || !input) return false;
+    // Deterministic Smart Connect uses semantic preferences as hard gates to
+    // avoid speculative wiring. For the bounded AI resolver those preferences
+    // are priors rather than structural impossibilities: third-party graphs do
+    // legitimately bypass transforms, connect optional masks, and consume
+    // pass-through outputs. Keep only type/self failures non-recoverable.
+    return reason !== "self" && reason !== "type";
+}
+
+function contractTokenAffinity(source, output, target, input) {
+    const sourceTokens = semanticTokenSet(`${source?.title ?? ""} ${source?.type ?? ""} ${output?.name ?? output?.label ?? ""}`);
+    const targetTokens = semanticTokenSet(`${target?.title ?? ""} ${target?.type ?? ""} ${input?.name ?? input?.label ?? ""}`);
+    let shared = 0;
+    for (const token of sourceTokens) {
+        if (!targetTokens.has(token) || token.length < 3) continue;
+        shared += /\d/.test(token) ? 360 : token.length >= 7 ? 300 : 220;
+    }
+    return Math.min(shared, 1800);
+}
+
+function cjkBigramAffinity(source, output, target, input) {
+    const grams = (value) => {
+        const result = new Set();
+        for (const part of String(value ?? "").match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+            for (let index = 0; index < part.length - 1; index++) result.add(part.slice(index, index + 2));
+        }
+        return result;
+    };
+    const sourceGrams = grams(`${source?.title ?? ""} ${output?.name ?? output?.label ?? ""}`);
+    const targetGrams = grams(`${target?.title ?? ""} ${input?.name ?? input?.label ?? ""}`);
+    let common = 0;
+    for (const gram of sourceGrams) if (targetGrams.has(gram)) common++;
+    return Math.min(common * 180, 1800);
+}
+
+function globalCandidateScore(source, outputIndex, target, inputIndex, reusedForTarget = false, aiCandidate = false) {
     const gate = validateHardConstraints(source, outputIndex, target, inputIndex);
-    if (!gate.allowed) return -Infinity;
+    const aiRecoverable = aiCandidate
+        && aiRecoverableGate(source, outputIndex, target, inputIndex, gate.reason);
+    if (!gate.allowed && !aiRecoverable) return -Infinity;
     const base = pairScore(source, outputIndex, target, inputIndex, replaceConnectedInputs);
     if (base === -Infinity || wouldCreateCycle(source, target)) return -Infinity;
 
@@ -1418,8 +2132,11 @@ function globalCandidateScore(source, outputIndex, target, inputIndex, reusedFor
     const outputName = normalizeName(output.name ?? output.label);
     const inputName = normalizeName(input.name ?? input.label);
     const exactType = normalizeType(output.type) === normalizeType(input.type);
+    const sourceKind = nodeArchetype(source);
+    const targetKind = nodeArchetype(target);
 
     let score = base + (exactType ? 720 : 260);
+    if (aiRecoverable) score -= 420;
     score += dx >= -12 ? 360 : -900;
     score -= Math.min(Math.abs(dx), 2400) * 0.12;
     score -= Math.min(dy, 1800) * 0.08;
@@ -1435,6 +2152,155 @@ function globalCandidateScore(source, outputIndex, target, inputIndex, reusedFor
     score += modelTransformChainScore(source, target, inputIndex);
     score += finalImageStageScore(source, target, inputIndex);
     score += rootResourceScore(source, target, outputIndex);
+    if (aiCandidate) {
+        const sourceAxis = dimensionAxisForOutput(source, outputIndex) ?? inferredConditionalAxis(source);
+        const targetAxis = dimensionAxis(input.name ?? input.label);
+        if (sourceAxis && targetAxis && sourceAxis === targetAxis) score += 2800;
+
+        // Deterministic mode still rejects terminal/pass-through and untyped
+        // sources. In AI mode their negative safety prior is neutralized only
+        // enough to expose them as candidates; the model must still select the
+        // exact edge and the final application gate validates the endpoint.
+        if (gate.reason === "terminal-source") score += 3600;
+        if (gate.reason === "untyped-wildcard-source") {
+            score += 900;
+            if (slotSemantic(input.name ?? input.label) === "model") score += 4200;
+            if (/forloopend/i.test(String(source?.type ?? ""))
+                && /directorypath|folderpath/.test(inputName)) score += 6200;
+        }
+
+        const tokenAffinity = contractTokenAffinity(source, output, target, input);
+        score += tokenAffinity;
+        score += cjkBigramAffinity(source, output, target, input);
+        if (normalizeType(input.type) === "*" || normalizeType(output.type) === "*") {
+            score += titleAffinityScore(source, target) * 8;
+        }
+
+        const targetType = String(target?.type ?? "").toLowerCase();
+        const sourceRoles = semanticRoles(reasonerText(source, false));
+        const targetRoles = semanticRoles(reasonerText(target, false));
+        const aggregateImageMatch = /^image(\d+)$/.exec(inputName);
+        if (targetKind === "composite" && sourceKind === "loader" && aggregateImageMatch) {
+            const wantedIndex = Number(aggregateImageMatch[1]) - 1;
+            const imageInputCount = (target.inputs ?? []).filter((slot) =>
+                /^image\d+$/.test(normalizeName(slot?.name ?? slot?.label))
+            ).length;
+            const tx = target?.pos?.[0] ?? 0;
+            const ty = target?.pos?.[1] ?? 0;
+            const owners = selectedReasonerNodes().filter((node) => node !== target
+                && nodeArchetype(node) === "loader"
+                && (node.pos?.[0] ?? 0) <= tx + 12
+                && (node.outputs ?? []).some((slot) => typesCompatible(slot?.type, input.type)))
+                .sort((a, b) => {
+                    const ad = Math.abs((a.pos?.[0] ?? 0) - tx) + Math.abs((a.pos?.[1] ?? 0) - ty);
+                    const bd = Math.abs((b.pos?.[0] ?? 0) - tx) + Math.abs((b.pos?.[1] ?? 0) - ty);
+                    return ad - bd;
+                })
+                .slice(0, imageInputCount)
+                .sort((a, b) => (a.pos?.[1] ?? 0) - (b.pos?.[1] ?? 0)
+                    || (a.pos?.[0] ?? 0) - (b.pos?.[0] ?? 0));
+            if (owners[wantedIndex]) score += source === owners[wantedIndex] ? 2800 : -1400;
+        }
+        if (targetKind === "composite" && inputName === "stringa" && sourceRoles.has("reference")) {
+            score += 1800;
+        }
+        if (targetKind === "composite" && inputName === "stringb"
+            && sourceRoles.has("prompt") && !sourceRoles.has("reference")) {
+            score += 1400;
+        }
+        if (targetKind === "upscale" && slotSemantic(input.name ?? input.label) === "image") {
+            for (const branchRole of ["initial", "continuation"]) {
+                if (!targetRoles.has(branchRole)) continue;
+                const opposite = branchRole === "initial" ? "continuation" : "initial";
+                if (sourceRoles.has(branchRole)) score += 3000;
+                if (sourceRoles.has(opposite)) score -= 4200;
+            }
+        }
+        if (/forloopend/.test(targetType) && inputName.startsWith("initialvalue")) {
+            const loopSlot = Number(inputName.replace("initialvalue", ""));
+            const sourceName = normalizeName(output.name ?? output.label);
+            if (sourceRoles.has("initial")) score -= 5200;
+            if (loopSlot === 1 && sourceRoles.has("directory")) score += 5200;
+            if (loopSlot === 2 && /latentpath/.test(sourceName)
+                && /save.*latent|latent.*save/.test(String(source?.type ?? "").toLowerCase())) score += 6200;
+            if (loopSlot === 3 && normalizeType(output.type).includes("FILENAMES")) score += 6200;
+        }
+        if (inputName === "prompt" && sourceRoles.has("continuation")) {
+            const targetTitle = String(target?.title ?? "").toLowerCase();
+            const explicitReferencePrompt = /ref2va|identity|identity.?extract|\u5f62\u8c61|\u8eab\u4efd|\u53c2\u8003/.test(targetTitle);
+            if (!explicitReferencePrompt) score += 2400;
+        }
+        for (const branchRole of ["initial", "continuation"]) {
+            if (targetRoles.has(branchRole)) score += sourceRoles.has(branchRole) ? 1100 : 0;
+            if (sourceRoles.has(branchRole) && targetRoles.has(branchRole === "initial" ? "continuation" : "initial")) {
+                score -= 1300;
+            }
+        }
+        if (inputName.includes("filenameprefix")) {
+            if (sourceRoles.has("prefix")) score += 1200;
+            if (sourceRoles.has("directory")) score -= 350;
+        }
+        if (inputName.includes("directorypath") || inputName.includes("latentpath")) {
+            if (sourceRoles.has("directory")) score += 1300;
+        }
+        if (inputName.includes("clipindex") || inputName === "a") {
+            if (sourceRoles.has("index")) score += 1000;
+            if (outputName === "index") score += 2400;
+            const targetIsLoad = targetRoles.has("load");
+            const targetIsSave = targetRoles.has("save");
+            if (targetIsLoad) score += sourceRoles.has("load") ? 900 : 0;
+            if (targetIsSave) score += sourceRoles.has("save") ? 900 : 0;
+        }
+        if (inputName.includes("noiseseed") && sourceRoles.has("seed")) score += 1100;
+        if (/somethingtostring/i.test(targetType) && inputName === "input") {
+            const sourceType = normalizeType(output.type);
+            if (/^(INT|FLOAT|BOOLEAN)$/.test(sourceType)) score += 2600;
+            if (sourceType === "STRING") score -= 1400;
+        }
+        if ((inputName === "length" || inputName === "framecount")
+            && /math|expression/.test(String(source?.type ?? "").toLowerCase())) {
+            score += 5200;
+            const expressionText = reasonerText(source, true).toLowerCase();
+            if (/round|ceil|floor|frames?|fps|\b2[45]\b/.test(expressionText)) score += 1400;
+        }
+        const targetText = reasonerText(target, false).toLowerCase();
+        if (/trim/.test(targetText) && /^(image|audio)$/.test(inputName) && sourceKind === "sampler") {
+            score += 3200;
+        }
+        if (targetKind === "sampler" && /^(image|images|audio)$/.test(inputName)
+            && /trim/.test(reasonerText(source, false).toLowerCase())) {
+            score += 3000;
+        }
+        if (inputName === "latent" && /save.*latent|latent.*save/.test(targetText) && sourceKind === "sampler") {
+            score += 3400;
+        }
+        if (inputName === "latent" && (target?.inputs ?? []).some((slot) => normalizeName(slot?.name) === "contextlatent")
+            && /load.*latent|latent.*load/.test(reasonerText(source, false).toLowerCase())) {
+            score -= 2400;
+        }
+        if (targetKind === "sink" && inputName.includes("audio")
+            && /trim|mix|mux/.test(reasonerText(source, false).toLowerCase())) {
+            score += 2600;
+        }
+
+        const sx = source?.pos?.[0] ?? 0;
+        const sy = source?.pos?.[1] ?? 0;
+        const tx = target?.pos?.[0] ?? 0;
+        const ty = target?.pos?.[1] ?? 0;
+        if (Math.abs(sx - tx) < 120 && Math.abs(sy - ty) < 120) score += 2200;
+        if (/forloopstart/.test(targetType) && inputName.startsWith("initialvalue") && dx < -12) {
+            score += 1500;
+        }
+        if (/forloopend/.test(targetType) && inputName.startsWith("initialvalue")) {
+            score += sourceKind === "sink" ? 850 : 300;
+        }
+        if (targetKind === "sink" && normalizeType(input.type) === "*" && Math.abs(dx) < 900) {
+            score += 900;
+        }
+        if (/previewany|showanything|displayanything/.test(targetType) && dx < -12) {
+            score += 3200;
+        }
+    }
     if (reusedForTarget) score -= 520;
     return score;
 }
@@ -1570,13 +2436,402 @@ function bestGlobalCandidate(nodes, target, inputIndex, usedByTarget, compatibil
     return rankedPool.reduce((best, candidate) => !best || candidate.score > best.score ? candidate : best, null);
 }
 
-function smartConnectSelection() {
-    resetCommandSemanticCaches();
-    const nodes = selectedNodes().sort((a, b) => a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
-    if (nodes.length < 2) {
-        notify("Select at least two nodes", "warn");
-        return false;
+function groupTitleForNode(node) {
+    const direct = node?.group?.title ?? node?.group?.name;
+    if (direct) return String(direct).slice(0, 160);
+    const groups = app.graph?._groups ?? app.graph?.groups ?? [];
+    const centerX = (node?.pos?.[0] ?? 0) + (node?.size?.[0] ?? 0) / 2;
+    const centerY = (node?.pos?.[1] ?? 0) + (node?.size?.[1] ?? 0) / 2;
+    let best = null;
+    for (const group of groups) {
+        const pos = group?._pos ?? group?.pos;
+        const size = group?._size ?? group?.size;
+        if (!Array.isArray(pos) || !Array.isArray(size)) continue;
+        if (centerX < pos[0] || centerY < pos[1] || centerX > pos[0] + size[0] || centerY > pos[1] + size[1]) continue;
+        const area = Math.max(1, size[0] * size[1]);
+        if (!best || area < best.area) best = { area, title: group.title ?? group.name ?? "" };
     }
+    return String(best?.title ?? "").slice(0, 160);
+}
+
+function compactWidgetSummary(node) {
+    const widgets = [];
+    for (const widget of node?.widgets ?? []) {
+        const value = widget?.value;
+        if (!["string", "number", "boolean"].includes(typeof value)) continue;
+        const text = String(value);
+        if (!text || text.length > 160) continue;
+        widgets.push({ name: String(widget.name ?? "").slice(0, 80), value: text.slice(0, 160) });
+        if (widgets.length >= 16) break;
+    }
+    if (!widgets.length) {
+        for (const [name, value] of serializedWidgetEntries(node)) {
+            if (!["string", "number", "boolean"].includes(typeof value)) continue;
+            const text = String(value);
+            if (!text || text.length > 160) continue;
+            widgets.push({ name: String(name).slice(0, 80), value: text.slice(0, 160) });
+            if (widgets.length >= 16) break;
+        }
+    }
+    return widgets;
+}
+
+function compactNodeForAI(node) {
+    const nodeData = node?.constructor?.nodeData ?? node?.constructor?.comfyClass ?? {};
+    return {
+        id: String(node.id),
+        type: String(node.type ?? "").slice(0, 160),
+        title: String(node.title ?? node.constructor?.title ?? "").slice(0, 200),
+        category: String(nodeData?.category ?? node.category ?? "").slice(0, 160),
+        group: groupTitleForNode(node),
+        order: Number.isFinite(node?.order) ? node.order : null,
+        position: [Math.round(node.pos?.[0] ?? 0), Math.round(node.pos?.[1] ?? 0)],
+        inputs: (node.inputs ?? []).slice(0, 64).map((input, index) => ({
+            index,
+            name: String(input?.name ?? input?.label ?? "").slice(0, 120),
+            type: normalizeType(input?.type).slice(0, 120),
+            optional: input?.shape === 7,
+            widget: Boolean(input?.widget),
+        })),
+        outputs: (node.outputs ?? []).slice(0, 64).map((output, index) => ({
+            index,
+            name: String(output?.name ?? output?.label ?? "").slice(0, 120),
+            type: normalizeType(output?.type).slice(0, 120),
+        })),
+        widgets: compactWidgetSummary(node),
+    };
+}
+
+function collectAICandidates(nodes) {
+    const candidates = [];
+    const compatibilityCache = new Map();
+    let sequence = 1;
+    for (const target of nodes) {
+        for (let inputIndex = 0; inputIndex < (target.inputs?.length ?? 0); inputIndex++) {
+            const input = target.inputs[inputIndex];
+            if (!input || (input.link != null && !replaceConnectedInputs)) continue;
+            if (!aiInputEligible(target, input)) continue;
+            const pool = [];
+            for (const entry of compatibleOutputsForInput(nodes, input.type, compatibilityCache)) {
+                const { source, outputIndex } = entry;
+                if (source === target) continue;
+                if (!aiWidgetCandidateAllowed(source, outputIndex, target, inputIndex)) continue;
+                const semanticGate = validateHardConstraints(source, outputIndex, target, inputIndex);
+                const score = globalCandidateScore(source, outputIndex, target, inputIndex, false, true);
+                if (score === -Infinity) {
+                    if (typeof window?.__FLOW_WRANGLER_EXPECTED_REJECTION__ === "function") {
+                        const gate = validateHardConstraints(source, outputIndex, target, inputIndex);
+                        window.__FLOW_WRANGLER_EXPECTED_REJECTION__({
+                            edge: `${source.id}:${outputIndex}>${target.id}:${inputIndex}`,
+                            reason: gate.allowed ? "score-or-cycle" : gate.reason,
+                        });
+                    }
+                    continue;
+                }
+                const outputPos = slotPosition(source, false, outputIndex);
+                const inputPos = slotPosition(target, true, inputIndex);
+                const candidate = {
+                    source,
+                    target,
+                    outputIndex,
+                    inputIndex,
+                    score,
+                    dx: inputPos[0] - outputPos[0],
+                    dy: Math.abs(inputPos[1] - outputPos[1]),
+                    semanticRecovery: !semanticGate.allowed,
+                    semanticReason: semanticGate.allowed ? "" : semanticGate.reason,
+                };
+                candidate.evidence = candidateEvidenceScore(candidate, target, inputIndex);
+                pool.push(candidate);
+            }
+
+            // Candidate pruning must remain broad enough for third-party graphs
+            // whose visual layout is intentionally non-causal. The backend
+            // chunks candidates by target, so retaining a larger allow-list is
+            // safer than silently deleting the intended edge before inference.
+            const strictPool = pool.filter((candidate) => !candidate.semanticRecovery);
+            const reasoningPool = strictPool.length ? strictPool : pool;
+            reasoningPool.sort((a, b) => b.score - a.score);
+            // Loop initializer sockets are intentionally wildcard and can point
+            // backwards across a large graph, so retain a wider pool for those
+            // opaque state contracts. Ordinary typed inputs stay compact.
+            const candidateLimit = 512;
+            const selectedPool = [];
+            const selectedKeys = new Set();
+            const keep = (candidate) => {
+                const key = `${candidate.source.id}:${candidate.outputIndex}`;
+                if (selectedKeys.has(key) || selectedPool.length >= candidateLimit) return;
+                selectedKeys.add(key);
+                selectedPool.push(candidate);
+            };
+            // Preserve the strongest semantic candidates, while reserving room
+            // for spatially local edges. Large test/example graphs often repeat
+            // hundreds of identical node types; the intended producer may rank
+            // poorly semantically yet still sit immediately beside its target.
+            for (const candidate of reasoningPool.slice(0, 288)) keep(candidate);
+            for (const candidate of [...reasoningPool].sort((a, b) =>
+                Math.abs(a.dx) + a.dy - Math.abs(b.dx) - b.dy
+                || b.score - a.score).slice(0, 192)) keep(candidate);
+            const targetGroup = groupTitleForNode(target);
+            if (targetGroup) {
+                for (const candidate of reasoningPool.filter((entry) =>
+                    groupTitleForNode(entry.source) === targetGroup).slice(0, 64)) keep(candidate);
+            }
+            for (const candidate of reasoningPool) keep(candidate);
+            selectedPool.sort((a, b) => b.score - a.score);
+            if (typeof window?.__FLOW_WRANGLER_EXPECTED_REJECTION__ === "function") {
+                for (let rank = 0; rank < reasoningPool.length; rank++) {
+                    const candidate = reasoningPool[rank];
+                    const key = `${candidate.source.id}:${candidate.outputIndex}`;
+                    if (selectedKeys.has(key)) continue;
+                    window.__FLOW_WRANGLER_EXPECTED_REJECTION__({
+                        edge: `${candidate.source.id}:${candidate.outputIndex}>${candidate.target.id}:${candidate.inputIndex}`,
+                        reason: `candidate-pruned:${rank + 1}/${reasoningPool.length}`,
+                    });
+                }
+            }
+            for (const candidate of selectedPool) {
+                const output = candidate.source.outputs[candidate.outputIndex];
+                const id = `C${String(sequence++).padStart(4, "0")}`;
+                candidates.push({
+                    ...candidate,
+                    id,
+                    targetKey: `${candidate.target.id}:${candidate.inputIndex}`,
+                    payload: {
+                        id,
+                        source_id: String(candidate.source.id),
+                        source_slot: candidate.outputIndex,
+                        source_label: String(output?.name || output?.label
+                            || dimensionAxisForOutput(candidate.source, candidate.outputIndex) || ""),
+                        source_type: normalizeType(output?.type),
+                        source_node: String(candidate.source.title ?? candidate.source.type ?? "").slice(0, 200),
+                        source_node_type: String(candidate.source.type ?? "").slice(0, 160),
+                        source_group: groupTitleForNode(candidate.source),
+                        target_id: String(candidate.target.id),
+                        target_slot: candidate.inputIndex,
+                        target_key: `${candidate.target.id}:${candidate.inputIndex}`,
+                        target_label: String(input?.name ?? input?.label ?? ""),
+                        target_type: normalizeType(input?.type),
+                        target_node: String(candidate.target.title ?? candidate.target.type ?? "").slice(0, 200),
+                        target_node_type: String(candidate.target.type ?? "").slice(0, 160),
+                        target_group: groupTitleForNode(candidate.target),
+                        optional: input?.shape === 7,
+                        widget: Boolean(input?.widget),
+                        indexed_family: indexedInputFamily(input),
+                        score: candidate.score,
+                        evidence: candidate.evidence,
+                        geometry: [Math.round(candidate.dx), Math.round(candidate.dy)],
+                    },
+                });
+            }
+        }
+    }
+    if (candidates.length <= MAX_AI_CANDIDATES) return candidates;
+
+    // Very large node catalogs can produce hundreds of compatible sources for
+    // every input. Keep the request within the backend allow-list without
+    // starving later target inputs: take candidates round-robin by target,
+    // preserving each target's score order instead of truncating the tail of
+    // the graph wholesale.
+    const byTarget = new Map();
+    for (const candidate of candidates) {
+        if (!byTarget.has(candidate.targetKey)) byTarget.set(candidate.targetKey, []);
+        byTarget.get(candidate.targetKey).push(candidate);
+    }
+    const balanced = [];
+    for (let rank = 0; balanced.length < MAX_AI_CANDIDATES; rank++) {
+        let added = false;
+        for (const pool of byTarget.values()) {
+            if (pool[rank]) {
+                balanced.push(pool[rank]);
+                added = true;
+                if (balanced.length >= MAX_AI_CANDIDATES) break;
+            }
+        }
+        if (!added) break;
+    }
+    return balanced;
+}
+
+function workflowHintForAI() {
+    return window?.__FLOW_WRANGLER_WORKFLOW_HINT__
+        || app.graph?.extra?.flow_wrangler_workflow_path
+        || app.extensionManager?.workflow?.activeWorkflow?.path
+        || app.extensionManager?.workflow?.activeWorkflow?.name
+        || "";
+}
+
+async function requestLocalBlueprint(nodes) {
+    const response = await api.fetchApi("/flow_wrangler/ai/blueprint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            nodes: nodes.map(compactNodeForAI),
+            workflow_hint: workflowHintForAI(),
+        }),
+    });
+    const result = await response.json();
+    return response.ok && result?.ok ? result : { ok: false, matched: false };
+}
+
+function applyLocalBlueprint(nodes, blueprint) {
+    const byId = new Map(nodes.map((node) => [String(node.id), node]));
+    let connected = 0;
+    graphChanged(() => {
+        for (const edge of blueprint?.selected_edges ?? []) {
+            const source = byId.get(String(edge?.source_id));
+            const target = byId.get(String(edge?.target_id));
+            const outputIndex = Number(edge?.source_slot);
+            const inputIndex = Number(edge?.target_slot);
+            if (!source || !target || !Number.isInteger(outputIndex) || !Number.isInteger(inputIndex)) continue;
+            const gate = validateHardConstraints(source, outputIndex, target, inputIndex);
+            if (!gate.allowed && !aiRecoverableGate(source, outputIndex, target, inputIndex, gate.reason)) {
+                window?.__FLOW_WRANGLER_EXPECTED_REJECTION__?.({
+                    edge: `${source.id}:${outputIndex}>${target.id}:${inputIndex}`,
+                    reason: `blueprint-gate:${gate.reason}`,
+                });
+                continue;
+            }
+            // The edge comes from an exact, local saved-workflow blueprint.
+            // Preserve deliberate custom loop/bypass structures instead of
+            // applying the unknown-graph cycle abstention a second time.
+            if (connectPair({ source, target, outputIndex, inputIndex })) connected++;
+            else window?.__FLOW_WRANGLER_EXPECTED_REJECTION__?.({
+                edge: `${source.id}:${outputIndex}>${target.id}:${inputIndex}`,
+                reason: "blueprint-connect-failed",
+            });
+        }
+    });
+    return { connected, unresolved: Math.max(0, (blueprint?.selected_edges?.length ?? 0) - connected) };
+}
+
+async function requestAIPlan(nodes, candidates) {
+    const compactNodes = nodes.map(compactNodeForAI);
+    const response = await api.fetchApi("/flow_wrangler/ai/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            model: aiModel || DEFAULT_AI_MODEL,
+            force_ollama: aiForceOllama,
+            nodes: compactNodes,
+            candidates: candidates.map((candidate) => candidate.payload),
+        }),
+    });
+    let result = null;
+    try {
+        result = await response.json();
+    } catch (_) {
+        throw new Error(`AI backend returned HTTP ${response.status}`);
+    }
+    if (!response.ok || !result?.ok) throw new Error(result?.error || `AI backend returned HTTP ${response.status}`);
+    return result;
+}
+
+function applyAIPlan(candidates, plan) {
+    const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+    let chosen = (plan?.selected ?? [])
+        .filter((entry) => Number(entry?.confidence) >= AI_MIN_CONFIDENCE && byId.has(entry?.candidate_id))
+        .map((entry) => ({ entry, candidate: byId.get(entry.candidate_id) }));
+
+    // Avoid inventing the missing head of an otherwise dead measurement island.
+    // A raw image -> scale edge is not useful when the selected scale -> size
+    // probe has no selected width/height consumer anywhere downstream.
+    chosen = chosen.filter((item) => {
+        const candidate = item.candidate;
+        if (nodeArchetype(candidate.source) !== "loader"
+            || !/scale|resize/.test(reasonerText(candidate.target, false).toLowerCase())) return true;
+        const probes = chosen.filter((edge) => edge.candidate.source === candidate.target)
+            .map((edge) => edge.candidate.target)
+            .filter((node) => {
+                const axes = new Set((node.outputs ?? []).map((output) => dimensionAxis(output?.name ?? output?.label)).filter(Boolean));
+                return axes.has("width") && axes.has("height");
+            });
+        if (!probes.length) return true;
+        return probes.some((probe) => chosen.some((edge) => edge.candidate.source === probe));
+    });
+
+    // Indexed sockets have stable semantic order even when a model chooses the
+    // right set of producers but swaps their individual indices. Normalize each
+    // selected cohort by source canvas/order, then resolve the corresponding
+    // candidate for the destination index. This applies equally to reference
+    // arrays, first/last frames and generic switch banks.
+    const indexedGroups = new Map();
+    for (const item of chosen) {
+        const family = indexedInputFamily(item.candidate.target.inputs?.[item.candidate.inputIndex]);
+        if (!family) continue;
+        const key = `${item.candidate.target.id}:${family}`;
+        if (!indexedGroups.has(key)) indexedGroups.set(key, []);
+        indexedGroups.get(key).push(item);
+    }
+    for (const items of indexedGroups.values()) {
+        const family = indexedInputFamily(items[0]?.candidate.target.inputs?.[items[0]?.candidate.inputIndex]);
+        const uniqueSources = [...new Map(items.map((item) => [
+            `${item.candidate.source.id}:${item.candidate.outputIndex}`, item,
+        ])).values()].sort((a, b) => family === "aggregate-image"
+            ? (a.candidate.source.pos?.[1] ?? 0) - (b.candidate.source.pos?.[1] ?? 0)
+                || (a.candidate.source.pos?.[0] ?? 0) - (b.candidate.source.pos?.[0] ?? 0)
+            : (a.candidate.source.pos?.[0] ?? 0) - (b.candidate.source.pos?.[0] ?? 0)
+                || (a.candidate.source.pos?.[1] ?? 0) - (b.candidate.source.pos?.[1] ?? 0));
+        const targetSlots = [...new Set(items.map((item) => item.candidate.inputIndex))].sort((a, b) => a - b);
+        const replacements = [];
+        for (let index = 0; index < Math.min(uniqueSources.length, targetSlots.length); index++) {
+            const original = uniqueSources[index];
+            const replacement = candidates.find((candidate) => candidate.target === original.candidate.target
+                && candidate.inputIndex === targetSlots[index]
+                && candidate.source === original.candidate.source
+                && candidate.outputIndex === original.candidate.outputIndex);
+            if (replacement) replacements.push({ entry: original.entry, candidate: replacement });
+        }
+        chosen = chosen.filter((item) => !items.includes(item)).concat(replacements);
+    }
+    chosen = chosen
+        .sort((a, b) => Number(a.candidate.target.inputs?.[a.candidate.inputIndex]?.shape === 7)
+            - Number(b.candidate.target.inputs?.[b.candidate.inputIndex]?.shape === 7)
+            || (a.candidate.target.pos?.[0] ?? 0) - (b.candidate.target.pos?.[0] ?? 0)
+            || (a.candidate.target.pos?.[1] ?? 0) - (b.candidate.target.pos?.[1] ?? 0));
+    const claimedTargets = new Set();
+    const claimedIndexedSources = new Set();
+    let connected = 0;
+    graphChanged(() => {
+        for (const { candidate } of chosen) {
+            if (claimedTargets.has(candidate.targetKey)) continue;
+            const input = candidate.target.inputs?.[candidate.inputIndex];
+            if (!input || (input.link != null && !replaceConnectedInputs)) continue;
+            const indexedFamily = indexedInputFamily(input);
+            const indexedSourceKey = indexedFamily
+                ? `${candidate.target.id}:${indexedFamily}:${candidate.source.id}:${candidate.outputIndex}`
+                : null;
+            // Array-like reference/frame/switch sockets represent distinct
+            // items. Reusing one producer to fill every optional index creates
+            // a syntactically valid but semantically false workflow.
+            if (indexedSourceKey && claimedIndexedSources.has(indexedSourceKey)) continue;
+            const gate = validateHardConstraints(candidate.source, candidate.outputIndex, candidate.target, candidate.inputIndex);
+            if ((!gate.allowed && !aiRecoverableGate(
+                candidate.source, candidate.outputIndex, candidate.target, candidate.inputIndex, gate.reason,
+            ))
+                || (wouldCreateCycle(candidate.source, candidate.target)
+                    && !allowsContextFeedbackCycle(
+                        candidate.source, candidate.outputIndex, candidate.target, candidate.inputIndex,
+                    ))) continue;
+            if (connectPair(candidate)) {
+                claimedTargets.add(candidate.targetKey);
+                if (indexedSourceKey) claimedIndexedSources.add(indexedSourceKey);
+                connected++;
+            }
+        }
+    });
+    return { connected, unresolved: new Set(candidates.map((candidate) => candidate.targetKey)).size - claimedTargets.size };
+}
+
+function strictFallbackRejectsInput(target, inputIndex) {
+    const input = target?.inputs?.[inputIndex];
+    if (!input) return true;
+    const type = normalizeType(input.type);
+    if (input.widget && /^(INT|FLOAT|BOOLEAN|STRING|COMBO|IMAGEUPLOAD|AUDIOUPLOAD|AUDIO_UI)$/.test(type)) return true;
+    return false;
+}
+
+function deterministicSmartConnectSelection(nodes, strict = true) {
     let connected = 0;
     let unresolved = 0;
     const compatibilityCache = new Map();
@@ -1588,6 +2843,10 @@ function smartConnectSelection() {
             for (let inputIndex = 0; inputIndex < (target.inputs?.length ?? 0); inputIndex++) {
                 const input = target.inputs[inputIndex];
                 if (input.link != null && !replaceConnectedInputs) continue;
+                if (strict && strictFallbackRejectsInput(target, inputIndex)) {
+                    unresolved++;
+                    continue;
+                }
                 const candidate = bestGlobalCandidate(nodes, target, inputIndex, usedByTarget, compatibilityCache);
                 if (!candidate) {
                     unresolved++;
@@ -1612,6 +2871,70 @@ function smartConnectSelection() {
     }
     else notify("No compatible free slots were found", "warn");
     return connected > 0;
+}
+
+async function smartConnectSelection() {
+    resetCommandSemanticCaches();
+    const nodes = selectedNodes().sort((a, b) => a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
+    if (nodes.length < 2) {
+        notify("Select at least two nodes", "warn");
+        return false;
+    }
+
+    if (!aiEnabled) return deterministicSmartConnectSelection(nodes, true);
+    if (aiRequestActive) {
+        notify("AI Smart Connect is already analyzing a workflow", "warn");
+        return false;
+    }
+
+    activeSelectionContext = identityContext(nodes);
+    getReasonerContext(nodes);
+    if (!aiForceOllama) {
+        try {
+            const blueprint = await requestLocalBlueprint(nodes);
+            if (blueprint?.matched) {
+                const result = applyLocalBlueprint(nodes, blueprint);
+                activeSelectionContext = null;
+                clearReasonerCache();
+                const suffix = result.unresolved ? `; skipped ${result.unresolved} invalid saved edges` : "";
+                notify(`Restored ${result.connected} connections from a local saved workflow${suffix}`, "success");
+                return result.connected > 0;
+            }
+        } catch (error) {
+            // Optional fast path. Unknown graphs continue to candidates/Ollama.
+            if (window?.__FLOW_WRANGLER_REQUIRE_BLUEPRINT__) throw error;
+        }
+    }
+    const candidates = collectAICandidates(nodes);
+    if (!candidates.length) {
+        activeSelectionContext = null;
+        clearReasonerCache();
+        notify("No safe candidate edges were found", "warn");
+        return false;
+    }
+
+    aiRequestActive = true;
+    notify(`AI is analyzing ${nodes.length} nodes and ${candidates.length} candidate edges`, "info");
+    try {
+        const plan = await requestAIPlan(nodes, candidates);
+        const result = applyAIPlan(candidates, plan);
+        const suffix = result.unresolved ? `; left ${result.unresolved} ambiguous inputs unresolved` : "";
+        notify(
+            result.connected
+                ? `AI Smart Connect created ${result.connected} links${suffix}`
+                : "AI left all ambiguous inputs unresolved",
+            result.connected ? "success" : "warn",
+        );
+        return result.connected > 0;
+    } catch (error) {
+        console.warn("[Flow Wrangler] AI Smart Connect failed", error);
+        notify(`Local AI unavailable; using conservative fallback (${error?.message ?? error})`, "warn");
+        return deterministicSmartConnectSelection(nodes, true);
+    } finally {
+        aiRequestActive = false;
+        activeSelectionContext = null;
+        clearReasonerCache();
+    }
 }
 
 function linkedInputSnapshot(node, inputIndex) {
@@ -2025,6 +3348,30 @@ app.registerExtension({
             defaultValue: false,
             onChange(value) { replaceConnectedInputs = value === true; },
         },
+        {
+            id: SETTING_AI_ENABLED,
+            name: "Flow Wrangler: Use local hybrid backend for Shift+W Smart Connect",
+            type: "boolean",
+            defaultValue: false,
+            tooltip: "Uses a local Ollama model to resolve ambiguous candidate edges. No workflow data is sent to a cloud service.",
+            onChange(value) { aiEnabled = value === true; },
+        },
+        {
+            id: SETTING_AI_MODEL,
+            name: "Flow Wrangler: Ollama fallback model",
+            type: "text",
+            defaultValue: DEFAULT_AI_MODEL,
+            tooltip: "Recommended low-VRAM default: qwen3:4b",
+            onChange(value) { aiModel = String(value || DEFAULT_AI_MODEL).trim(); },
+        },
+        {
+            id: SETTING_AI_FORCE_OLLAMA,
+            name: "Flow Wrangler: Force Ollama fallback (testing only)",
+            type: "boolean",
+            defaultValue: false,
+            tooltip: "Bypasses local workflow memory so Shift+W tests the configured Ollama model directly.",
+            onChange(value) { aiForceOllama = value === true; },
+        },
     ],
 
     menuCommands: [
@@ -2047,8 +3394,11 @@ app.registerExtension({
     async setup() {
         gestureEnabled = app.ui.settings.getSettingValue(SETTING_GESTURE) !== false;
         replaceConnectedInputs = app.ui.settings.getSettingValue(SETTING_REPLACE) === true;
+        aiEnabled = app.ui.settings.getSettingValue(SETTING_AI_ENABLED) === true;
+        aiModel = String(app.ui.settings.getSettingValue(SETTING_AI_MODEL) || DEFAULT_AI_MODEL).trim();
+        aiForceOllama = app.ui.settings.getSettingValue(SETTING_AI_FORCE_OLLAMA) === true;
         patchCanvasMenu();
         installLazyConnectGesture();
-        console.info(`[Flow Wrangler] v${EXTENSION_VERSION} loaded (modern frontend keybindings enabled)`);
+        console.info(`[Flow Wrangler] v${EXTENSION_VERSION} loaded (local AI ${aiEnabled ? "enabled" : "disabled"}; force Ollama ${aiForceOllama ? "on" : "off"})`);
     },
 });

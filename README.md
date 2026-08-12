@@ -1,6 +1,6 @@
 # ComfyUI Flow Wrangler
 
-![Version](https://img.shields.io/badge/version-v0.3.0-blue)
+![Version](https://img.shields.io/badge/version-v0.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Frontend%20Extension-black)
 
@@ -22,7 +22,7 @@ Select a group of disconnected nodes, press **`Shift+W`**, and Smart Connect tri
 
 The goal is not to fill every compatible socket. Flow Wrangler prioritizes connection quality and can leave an input unresolved when the available evidence is too ambiguous.
 
-**Current release: `v0.3.0`**
+**Current development version: `v0.4.0`**
 
 ---
 
@@ -71,6 +71,53 @@ No new workflow node is added to the node library. Flow Wrangler extends the Com
 4. Review any inputs intentionally left unresolved.
 
 For a fast two-node connection, hold **Alt** and right-click the source node, then the target node. The gesture can also be used by dragging from source to target.
+
+### Optional local hybrid backend
+
+The default Smart Connect solver remains frontend-only and deterministic. The
+optional v0.4 backend adds three local-only layers:
+
+1. If the selected disconnected topology matches a saved local workflow, it
+   restores that workflow's exact wiring blueprint. A source-file hint keeps
+   different saved revisions of an otherwise identical topology distinct.
+2. For related but non-identical graphs, it learns stable node/port contracts
+   from connected workflow JSON files in the local ComfyUI
+   `user/*/workflows` folders. The current graph is excluded from this
+   generalized contract-learning pass.
+3. When neither layer provides a safe answer, it can ask a small model running
+   in [Ollama](https://ollama.com/) to choose among the already safety-filtered
+   candidate edges.
+
+```bash
+ollama pull qwen3:4b
+```
+
+Then open ComfyUI settings and enable **Flow Wrangler: Use local hybrid backend
+for Shift+W Smart Connect**. Ollama is optional when local workflow memory and
+deterministic contracts can resolve the graph. The fallback model defaults to
+`qwen3:4b`; `qwen3:8b` is a slower optional choice for machines with more VRAM.
+
+- The hybrid backend is disabled by default and must be enabled in Settings.
+- Workflow memory stays on the machine and stores no generated media.
+- The model runs outside the ComfyUI process through the local Ollama service.
+- Workflow summaries are accepted only by the local Flow Wrangler backend and
+  sent only to a loopback Ollama URL (`127.0.0.1`, `localhost` or `::1`).
+- Returned edge IDs are allow-listed and rechecked by the deterministic safety
+  gates before the graph is changed.
+- If Ollama or the selected model is unavailable, Shift+W falls back to the
+  conservative deterministic solver.
+
+The local model does not reconstruct the whole graph directly. It is a fallback
+that chooses among a bounded candidate set after exact local blueprints,
+generalized contracts and safety gates have handled the high-confidence
+structure.
+
+To test the Ollama layer itself, enable **Flow Wrangler: Force Ollama fallback
+(testing only)** as well. This deliberately bypasses exact blueprints and local
+workflow memory, so it should stay disabled during normal use. Load one of the generated
+`*_UNCONNECTED.json` fixtures, select all nodes, press **Shift+W**, and compare
+the result with its matching `*_GROUND_TRUTH.json` file. Disable the force
+setting after the test.
 
 ---
 
@@ -151,7 +198,30 @@ Flow Wrangler is free and open source under the [MIT License](LICENSE).
 
 Flow Wrangler 借鉴 Blender Node Wrangler 一类工具“减少机械操作”的交互目标，但不复制其代码、节点规则或实现方式。
 
-> **当前正式版本：`v0.3.0`**
+> **当前开发版本：`v0.4.0`**
+
+### 可选本地混合后端
+
+默认 Smart Connect 仍使用纯前端确定性规则。v0.4 的可选本地混合后端分为三层：
+如果当前未接线拓扑与本机保存的工作流一致，先按该文件的精确蓝图还原（文件路径
+提示可区分拓扑相同但连线不同的版本）；对于相似但不完全相同的图，再从 ComfyUI
+`user/*/workflows` 中学习稳定节点 / 端口契约，且当前图会从这一泛化学习阶段排除；
+两层都不能安全解决时，才调用本机 Ollama 小模型，在安全约束过滤后的候选连接中
+作兜底判断：
+
+```bash
+ollama pull qwen3:4b
+```
+
+随后在 ComfyUI 设置中启用 **Flow Wrangler：Shift+W 使用本地混合后端智能连接**。
+该模式默认关闭；如果本地记忆与确定性契约已经能完成连接，则不要求 Ollama。需要
+模型兜底而 Ollama 不可用时，会自动退回保守规则。工作流摘要只允许发送到本机回环
+地址，模型返回的连接也会再次经过类型、数据角色、环路和分支校验。
+
+如果要单独验证 Ollama 层，可再开启 **Flow Wrangler：强制使用 Ollama 兜底（仅测试）**。
+该开关会故意绕过精确蓝图与本地工作流记忆；正常使用时应保持关闭。载入测试目录中的
+`*_UNCONNECTED.json`，全选节点后按 **Shift+W**，再与同名
+`*_GROUND_TRUTH.json` 对照。测试结束后请关闭强制开关。
 
 ---
 
@@ -1037,22 +1107,10 @@ locales/zh
 
 # 🧩 兼容性设计
 
-Flow Wrangler 是：
-
-> **纯前端 ComfyUI 扩展**
-
-不会新增模型推理节点。
-
-不会：
-
-```text
-加载模型
-运行推理
-增加 VRAM 占用
-增加额外 Python 推理依赖
-```
-
-它主要运行在 ComfyUI 前端节点编辑层。
+Flow Wrangler 的编辑器功能主要运行在 ComfyUI 前端，不会新增模型推理节点，也不
+会修改工作流的执行逻辑。默认模式不加载模型、不增加 VRAM 占用。只有用户主动启用
+本地混合后端且需要 Ollama 兜底时，才会调用本机已安装的小模型；插件本身没有额外
+Python 第三方依赖。
 
 ---
 

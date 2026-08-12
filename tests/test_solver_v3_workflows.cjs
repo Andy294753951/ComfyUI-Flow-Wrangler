@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pluginPath = path.resolve(__dirname, '..', 'web', 'flow_wrangler.js');
-const rawSource = fs.readFileSync(pluginPath, 'utf8').replace(/^import\s+\{\s*app\s*\}\s+from\s+[^;]+;\s*/m, '');
+const rawSource = fs.readFileSync(pluginPath, 'utf8').replace(/^import\s+[^;]+;\s*/gm, '');
 const casesDir = path.resolve(__dirname, 'solver_v3_workflows');
 
 function expectedEdges(wf) {

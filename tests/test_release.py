@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 COMMAND_IDS = {
     "flow-wrangler.smart-connect",
     "flow-wrangler.swap-inputs",
@@ -18,6 +18,9 @@ COMMAND_IDS = {
 SETTING_IDS = {
     "Comfy.FlowWrangler.LazyConnectGesture",
     "Comfy.FlowWrangler.ReplaceConnectedInputs",
+    "Comfy.FlowWrangler.AIEnabled",
+    "Comfy.FlowWrangler.AIModel",
+    "Comfy.FlowWrangler.AIForceOllama",
 }
 
 
@@ -33,8 +36,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(module.__version__, VERSION)
 
         javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")
-        self.assertIn(f'const EXTENSION_VERSION = "0.3.0";', javascript)
-        self.assertIn(f"`v{VERSION}`", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn(f'const EXTENSION_VERSION = "{VERSION}";', javascript)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"version-v{VERSION}", readme)
 
     def test_default_javascript_ui_contains_no_cjk_strings(self):
         javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")

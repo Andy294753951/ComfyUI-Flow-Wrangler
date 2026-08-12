@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pluginPath = path.resolve(__dirname, '..', 'web', 'flow_wrangler.js');
-let source = fs.readFileSync(pluginPath, 'utf8').replace(/^import\s+\{\s*app\s*\}\s+from\s+[^;]+;\s*/m, '');
+let source = fs.readFileSync(pluginPath, 'utf8').replace(/^import\s+[^;]+;\s*/gm, '');
 let registeredExtension = null, nextLinkId = 1;
 const graph = { links:{}, nodes:[], getNodeById(id){return this.nodes.find(n=>String(n.id)===String(id))}, beforeChange(){}, afterChange(){}, setDirtyCanvas(){} };
 function makeNode(id,type,title,x,y,inputs,outputs,widgets_values=[]) {

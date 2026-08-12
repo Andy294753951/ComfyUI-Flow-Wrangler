@@ -3,7 +3,7 @@ const path = require("path");
 
 const pluginPath = path.resolve(__dirname, "..", "web", "flow_wrangler.js");
 let source = fs.readFileSync(pluginPath, "utf8");
-source = source.replace(/^import\s+\{\s*app\s*\}\s+from\s+[^;]+;\s*/m, "");
+source = source.replace(/^import\s+[^;]+;\s*/gm, "");
 
 let registeredExtension = null;
 let nextLinkId = 1;
