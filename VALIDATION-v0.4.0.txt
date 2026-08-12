@@ -1,0 +1,51 @@
+ComfyUI Flow Wrangler v0.4.0 release validation
+================================================
+Date: 2026-08-13
+
+Automated release checks
+------------------------
+PASS node --check web/flow_wrangler.js
+PASS node tests/test_ai_frontend_contracts.cjs
+PASS node tests/test_smart_connect.cjs
+PASS node tests/test_smart_connect_roles.cjs
+PASS node tests/test_example_workflows.cjs
+PASS node tests/test_sink_image_contracts.cjs
+PASS node tests/test_solver_v3_safety.cjs
+PASS node tests/test_solver_v3_workflows.cjs
+PASS python -m unittest tests.test_ai_backend tests.test_release
+
+Local corpus reconstruction
+---------------------------
+PASS 3,032/3,032 connected workflow files exact after disconnection
+PASS 43,354/43,354 valid stored edges restored
+PASS 1,204/1,204 unique connected topologies exact
+PASS 23,633/23,633 unique-topology edges restored
+PASS 64/64 native zero-link workflows with one unambiguous reference exact
+PASS 222/222 native zero-link workflows structurally safe
+NOTE 158 native zero-link workflows have no semantic ground truth and are not
+     claimed as semantically exact
+NOTE 121 stale stored link records with missing endpoints were excluded
+NOTE one malformed .json file that ComfyUI cannot parse was not treated as a
+     runnable workflow
+
+Ollama fallback
+---------------
+PASS qwen3:4b forced fallback stability: 195/195 exact across three rounds
+PASS qwen3:4b final post-large-graph-fix run: 65/65 exact
+PASS large 107-node catalog request capped fairly at 4,096 candidates
+PASS backend request accepted under the 8 MB local limit
+
+Release metadata and safety
+---------------------------
+PASS __init__.py version = 0.4.0
+PASS web/flow_wrangler.js EXTENSION_VERSION = 0.4.0
+PASS README marks v0.4.0 as the current version
+PASS test_release.py version synchronized
+PASS default JavaScript UI contains no CJK UI strings
+PASS English and Simplified Chinese locale coverage for commands/settings
+PASS no requirements.txt
+PASS no install.py
+PASS NODE_CLASS_MAPPINGS remains empty (no workflow execution nodes)
+PASS local backend disabled by default
+PASS Ollama endpoint restricted to loopback hosts
+PASS local scan reports and workflow manifests excluded from Git

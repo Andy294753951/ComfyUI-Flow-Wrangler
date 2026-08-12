@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0 - Development
+## v0.4.0 - 2026-08-13
 
 - 新增可选本地混合后端：同一未接线拓扑先恢复本机已保存工作流的精确蓝图；相似但不相同的图再使用稳定节点 / 端口契约，Ollama 小模型仅作为无安全本地先例时的兜底。
 - 自动发现 `user/*/workflows` 中的本地 JSON，并按文件修改时间缓存；不上传工作流或生成媒体。
@@ -12,7 +12,7 @@
 - 增加 Minimax H3 / Ref2VA / Motion Context / RTX 超分 / VHS 分支合同，以及合法 IMAGE / AUDIO 上下文反馈环支持。
 - 修复对象形式 `widgets_values`、带下划线的 `directory_path`、通配 ForLoop 状态输出、重复 LoadImage 聚合顺序等第三方节点兼容问题。
 - Minimax M3 v9 未接线工作流零配置盲测：`83/83` exact，`0` extra，且未使用 v9 同拓扑副本作为记忆。
-- 增加仅用于验证的“强制 Ollama 兜底”开关，可绕过本地工作流记忆；3 组复杂合成工作流覆盖 LoRA / CLIP、ControlNet、视频 / 音频和交错多分支，`qwen3:4b` 连续 3 轮 `195/195` exact。
+- 增加仅用于验证的“强制 Ollama 兜底”开关，可绕过精确蓝图、本地工作流记忆和确定性契约；3 组复杂合成工作流覆盖 LoRA / CLIP、ControlNet、视频 / 音频和交错多分支，`qwen3:4b` 连续 3 轮 `195/195` exact，最终大图修复后复验 `65/65` exact。
 - 保留前端 Hard Gate、候选 allow-list、环路 / 分支复检与歧义留空策略；本地后端默认关闭。
 
 ## v0.3.0 - 2026-08-10

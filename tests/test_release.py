@@ -39,6 +39,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(f'const EXTENSION_VERSION = "{VERSION}";', javascript)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(f"version-v{VERSION}", readme)
+        self.assertIn(f"Current version: `v{VERSION}`", readme)
+        self.assertIn(f"当前版本：`v{VERSION}`", readme)
+        self.assertNotIn("Current development version", readme)
+        self.assertTrue((ROOT / f"RELEASE-NOTES-v{VERSION}.md").is_file())
+        self.assertTrue((ROOT / f"VALIDATION-v{VERSION}.txt").is_file())
 
     def test_default_javascript_ui_contains_no_cjk_strings(self):
         javascript = (ROOT / "web" / "flow_wrangler.js").read_text(encoding="utf-8")

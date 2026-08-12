@@ -41,7 +41,7 @@ body:
     id: flow_wrangler_version
     attributes:
       label: Flow Wrangler version
-      placeholder: e.g. v0.3.0
+      placeholder: e.g. v0.4.0
     validations:
       required: true
 
@@ -108,4 +108,3 @@ body:
           required: true
         - label: I restarted ComfyUI and force-refreshed the browser before reproducing this result.
           required: true
-

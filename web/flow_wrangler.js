@@ -3353,7 +3353,7 @@ app.registerExtension({
             name: "Flow Wrangler: Use local hybrid backend for Shift+W Smart Connect",
             type: "boolean",
             defaultValue: false,
-            tooltip: "Uses a local Ollama model to resolve ambiguous candidate edges. No workflow data is sent to a cloud service.",
+            tooltip: "Restores exact local workflow blueprints, reuses stable local port contracts, and uses loopback Ollama only as a fallback. No workflow data is sent to a cloud service.",
             onChange(value) { aiEnabled = value === true; },
         },
         {
@@ -3369,7 +3369,7 @@ app.registerExtension({
             name: "Flow Wrangler: Force Ollama fallback (testing only)",
             type: "boolean",
             defaultValue: false,
-            tooltip: "Bypasses local workflow memory so Shift+W tests the configured Ollama model directly.",
+            tooltip: "Bypasses exact blueprints, local workflow memory, and deterministic contracts so Shift+W tests the configured Ollama model directly.",
             onChange(value) { aiForceOllama = value === true; },
         },
     ],

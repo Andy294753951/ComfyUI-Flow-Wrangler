@@ -2,7 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-v0.4.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![ComfyUI](https://img.shields.io/badge/ComfyUI-Frontend%20Extension-black)
+![ComfyUI](https://img.shields.io/badge/ComfyUI-Workflow%20Extension-black)
 
 [English](#english) · [中文](#中文文档)
 
@@ -10,7 +10,7 @@
 
 ## Stop manually wiring large ComfyUI workflows
 
-**ComfyUI Flow Wrangler** is an open-source frontend productivity extension for ComfyUI.
+**ComfyUI Flow Wrangler** is an open-source workflow-editor productivity extension for ComfyUI.
 
 Select a group of disconnected nodes, press **`Shift+W`**, and Smart Connect tries to reconstruct the most plausible data flow from the graph context.
 
@@ -22,7 +22,7 @@ Select a group of disconnected nodes, press **`Shift+W`**, and Smart Connect tri
 
 The goal is not to fill every compatible socket. Flow Wrangler prioritizes connection quality and can leave an input unresolved when the available evidence is too ambiguous.
 
-**Current development version: `v0.4.0`**
+**Current version: `v0.4.0`**
 
 ---
 
@@ -74,7 +74,7 @@ For a fast two-node connection, hold **Alt** and right-click the source node, th
 
 ### Optional local hybrid backend
 
-The default Smart Connect solver remains frontend-only and deterministic. The
+The default Smart Connect solver remains deterministic and runs in the browser. The
 optional v0.4 backend adds three local-only layers:
 
 1. If the selected disconnected topology matches a saved local workflow, it
@@ -113,8 +113,8 @@ generalized contracts and safety gates have handled the high-confidence
 structure.
 
 To test the Ollama layer itself, enable **Flow Wrangler: Force Ollama fallback
-(testing only)** as well. This deliberately bypasses exact blueprints and local
-workflow memory, so it should stay disabled during normal use. Load one of the generated
+(testing only)** as well. This deliberately bypasses exact blueprints, local
+workflow memory and deterministic contract resolution, so it should stay disabled during normal use. Load one of the generated
 `*_UNCONNECTED.json` fixtures, select all nodes, press **Shift+W**, and compare
 the result with its matching `*_GROUND_TRUTH.json` file. Disable the force
 setting after the test.
@@ -192,17 +192,17 @@ Flow Wrangler is free and open source under the [MIT License](LICENSE).
 
 ## 中文文档
 
-**ComfyUI Flow Wrangler** 是一个面向 ComfyUI 节点工作流的前端效率扩展。
+**ComfyUI Flow Wrangler** 是一个面向 ComfyUI 节点工作流编辑器的开源效率扩展。
 
 它的目标是减少大型工作流中重复拉线、精确点选、批量重连、节点整理和旁路切换等机械操作，让用户可以更快地编辑复杂节点图。
 
 Flow Wrangler 借鉴 Blender Node Wrangler 一类工具“减少机械操作”的交互目标，但不复制其代码、节点规则或实现方式。
 
-> **当前开发版本：`v0.4.0`**
+> **当前版本：`v0.4.0`**
 
 ### 可选本地混合后端
 
-默认 Smart Connect 仍使用纯前端确定性规则。v0.4 的可选本地混合后端分为三层：
+默认 Smart Connect 仍使用在浏览器中运行的确定性规则。v0.4 的可选本地混合后端分为三层：
 如果当前未接线拓扑与本机保存的工作流一致，先按该文件的精确蓝图还原（文件路径
 提示可区分拓扑相同但连线不同的版本）；对于相似但不完全相同的图，再从 ComfyUI
 `user/*/workflows` 中学习稳定节点 / 端口契约，且当前图会从这一泛化学习阶段排除；
@@ -219,7 +219,7 @@ ollama pull qwen3:4b
 地址，模型返回的连接也会再次经过类型、数据角色、环路和分支校验。
 
 如果要单独验证 Ollama 层，可再开启 **Flow Wrangler：强制使用 Ollama 兜底（仅测试）**。
-该开关会故意绕过精确蓝图与本地工作流记忆；正常使用时应保持关闭。载入测试目录中的
+该开关会故意绕过精确蓝图、本地工作流记忆与确定性契约解析；正常使用时应保持关闭。载入测试目录中的
 `*_UNCONNECTED.json`，全选节点后按 **Shift+W**，再与同名
 `*_GROUND_TRUTH.json` 对照。测试结束后请关闭强制开关。
 
@@ -254,7 +254,7 @@ Smart Connect 不只是按照 ComfyUI 的数据类型寻找最近节点。
 - 一对多输出
 - 候选置信度
 
-v0.3.0 的目标不是：
+当前 Smart Connect 的目标不是：
 
 > “尽量把所有输入都接满”
 
@@ -264,9 +264,10 @@ v0.3.0 的目标不是：
 
 ---
 
-## 🧠 Smart Connect v0.3.0
+## 🧠 Smart Connect v0.4.0
 
-v0.3.0 对 Smart Connect 的核心逻辑进行了较大升级。
+当前 v0.4.0 引擎包含保守 Hard Gate、数据角色、分支感知、本地精确蓝图、本地端口
+契约和可选 Ollama 兜底，同时继续保留“歧义时留空”的原则。
 
 过去 ComfyUI 中很多语义完全不同的数据都会使用同一个基础类型。
 
@@ -315,7 +316,7 @@ IPAdapter 修改后的模型
 
 的连接。
 
-因此 v0.3.0 引入了更严格的 Smart Connect 判断流程。
+因此当前版本使用更严格的 Smart Connect 判断流程。
 
 ---
 
@@ -537,7 +538,7 @@ ControlNet
 
 ### 8. MODEL Transform Chain
 
-v0.3.0 会把常见：
+当前版本会把常见：
 
 ```text
 MODEL → MODEL
@@ -667,7 +668,7 @@ preprocessor.image
 
 ### 11. Confidence Abstention
 
-这是 v0.3.0 一个很重要的变化。
+这是当前版本一个很重要的设计原则。
 
 如果 Smart Connect 发现：
 
@@ -1175,9 +1176,9 @@ Krea2 Control
 
 ---
 
-# 🧪 v0.3.0 回归测试
+# 🧪 v0.4.0 回归测试
 
-v0.3.0 在正式发布前针对 Smart Connect 进行了多组回归测试。
+v0.4.0 针对 Smart Connect 的确定性规则、本地蓝图、契约解析和 Ollama 兜底进行了多层回归测试。
 
 测试重点不是只看：
 
@@ -1213,6 +1214,18 @@ Solver Safety
 Solver Workflow
 Release Metadata
 ```
+
+此外，全盘有效工作流回归会把已有连线临时移除后再进行逐边比对：
+
+```text
+3,032 / 3,032 个工作流 Exact PASS
+43,354 / 43,354 条有效连接完全一致
+64 / 64 个具有唯一参考答案的原生未接线工作流 Exact PASS
+qwen3:4b 强制兜底复杂测试 65 / 65 Exact PASS
+```
+
+对于没有任何参考答案的原生未接线工作流，只报告端点、类型与单输入唯一性等可验证
+结构安全结果，不把“看起来合理”冒充语义正确。
 
 ---
 
@@ -1362,9 +1375,9 @@ MODEL transform chain
 
 ---
 
-# 🎯 v0.3.0 重点解决的问题
+# 🎯 当前版本重点解决的问题
 
-v0.3.0 主要修复了此前真实工作流测试暴露出的几类问题。
+当前版本重点处理此前真实工作流测试暴露出的几类问题。
 
 ---
 
@@ -1396,7 +1409,7 @@ VAEDecode
  └──→ Final Preview
 ```
 
-v0.3.0 加强了：
+当前版本加强了：
 
 ```text
 IMAGE Data Identity
@@ -1422,7 +1435,7 @@ Final-stage reasoning
 IMAGE → preprocessor.image
 ```
 
-v0.3.0 明确区分：
+当前版本明确区分：
 
 ```text
 preprocessor input
@@ -1468,7 +1481,7 @@ FINAL-02 IPAdapter
 FINAL-03 IPAdapter
 ```
 
-v0.3.0 加强了：
+当前版本加强了：
 
 ```text
 Branch Ownership
@@ -1564,7 +1577,7 @@ IMAGE
 
 而接到错误的中间图。
 
-v0.3.0 会结合：
+当前版本会结合：
 
 ```text
 数据阶段
@@ -1741,7 +1754,7 @@ Smart Connect 本质上是在根据：
 
 > 用户真正想连接哪一个。
 
-因此 v0.3.0 对高风险歧义采用：
+因此当前版本对高风险歧义采用：
 
 ```text
 Abstention
@@ -1866,7 +1879,7 @@ Alt + Right Click
 
 这不一定是 bug。
 
-v0.3.0 会主动避免：
+当前版本会主动避免：
 
 ```text
 低置信度高风险连接
@@ -2083,6 +2096,6 @@ workflow JSON
 
 ---
 
-# ComfyUI Flow Wrangler v0.3.0
+# ComfyUI Flow Wrangler v0.4.0
 
 **Connect faster. Organize cleaner. Guess less.**
